@@ -1,0 +1,28 @@
+# Core Multi-Agent Framework
+google-adk==1.5.0
+litellm==1.74.0.post1
+
+# MCP Protocol
+mcp==1.21.2
+
+# Vision & Perception
+groundingdino_py==0.4.0
+opencv-python>=4.8.0  # For color-based detection (Phase 1.5)
+#torch==2.9.0+cpu
+#open3d==0.19.0
+
+# Robotics & Math
+ikpy==3.4.2
+scipy==1.16.3
+numpy==2.3.5
+
+# ROS2 Communication
+#rclpy==7.1.4
+#builtin_interfaces==2.0.2
+#control_msgs==5.4.0
+#trajectory_msgs==5.3.6
+websockets==15.0.1
+
+# Utilities
+python-dotenv==1.2.1
+protobuf==6.33.1
