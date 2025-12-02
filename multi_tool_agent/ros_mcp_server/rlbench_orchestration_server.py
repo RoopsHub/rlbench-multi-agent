@@ -27,7 +27,7 @@ from rlbench.action_modes.action_mode import MoveArmThenGripper
 from rlbench.action_modes.arm_action_modes import EndEffectorPoseViaIK, EndEffectorPoseViaPlanning
 from rlbench.action_modes.gripper_action_modes import Discrete
 from rlbench.observation_config import ObservationConfig
-from rlbench.tasks import ReachTarget, PickAndLift
+from rlbench.tasks import ReachTarget, PickAndLift, PickUpCup, PushButton, PutRubbishInBin
 from rlbench.backend.exceptions import InvalidActionError
 
 # ==============================================================================
@@ -40,6 +40,7 @@ _ENV = None
 _TASK = None
 _CURRENT_OBS = None
 _TASK_CLASS = ReachTarget  # Default task
+_TASK_DESCRIPTION = ""  # Store task description from reset
 
 # Output directory for sensor data
 OUTPUT_DIR = Path(__file__).parent / "sensor_data"
@@ -86,6 +87,72 @@ def get_environment():
     return _ENV, _TASK, _CURRENT_OBS
 
 
+def parse_task_objects(task_description: str) -> list:
+    """
+    Parse task description to extract object names WITH COLORS for detection
+
+    Hybrid VoxPoser approach: Extract both color AND shape to handle multiple objects
+    Example: "pick up the red block" → ["red cube"]
+    Example: "reach the red target" → ["red sphere"]
+
+    Args:
+        task_description: Natural language task description from RLBench
+
+    Returns:
+        list of object names with colors suitable for GroundingDINO prompts
+    """
+    desc_lower = task_description.lower()
+    objects = []
+
+    # Extract color adjectives
+    colors = []
+    color_keywords = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan', 'magenta', 'orange']
+    for color in color_keywords:
+        if color in desc_lower:
+            colors.append(color)
+
+    # Object mapping: task keywords → GroundingDINO prompts
+    object_keywords = [
+        ('block', 'cube'),
+        ('cube', 'cube'),
+        ('sphere', 'sphere'),
+        ('ball', 'sphere'),
+        ('cup', 'cup'),
+        ('button', 'button'),
+        ('bin', 'bin'),
+        ('trash', 'trash'),
+        ('rubbish', 'trash'),
+        ('target', 'sphere'),  # "target" usually refers to sphere in reach tasks
+    ]
+
+    # Extract objects with their colors
+    for keyword, obj_name in object_keywords:
+        if keyword in desc_lower:
+            # Build object description with color
+            # Find which color appears before this object keyword
+            obj_index = desc_lower.find(keyword)
+            relevant_color = None
+
+            # Look for color words before the object keyword
+            for color in colors:
+                color_index = desc_lower.find(color)
+                # If color appears before object and within reasonable distance
+                if color_index >= 0 and color_index < obj_index and (obj_index - color_index) < 30:
+                    relevant_color = color
+                    break
+
+            # Build the detection phrase
+            if relevant_color:
+                obj_with_color = f"{relevant_color} {obj_name}"
+            else:
+                obj_with_color = obj_name
+
+            if obj_with_color not in objects:  # Avoid duplicates
+                objects.append(obj_with_color)
+
+    return objects
+
+
 # ==============================================================================
 # Tool 1: Get Camera Observation
 # ==============================================================================
@@ -94,9 +161,10 @@ def get_environment():
 def get_camera_observation() -> dict:
     """
     Capture RGB and depth images from robot camera with calibration data
+    Also returns task objects parsed from description (VoxPoser-style)
 
     Returns:
-        dict with rgb_path, depth_path, intrinsics, and camera pose
+        dict with rgb_path, depth_path, intrinsics, camera pose, and task_objects list
     """
     global _CURRENT_OBS
 
@@ -111,18 +179,28 @@ def get_camera_observation() -> dict:
         # Generate timestamp in YYYYMMDD_HHMMSS format
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Get RGB image and convert to BGR for entire perception pipeline
+        # Get RGB image - save as RGB since GroundingDINO expects RGB
         rgb = obs.front_rgb
         rgb_uint8 = (rgb * 255).astype(np.uint8)
 
-        # Convert RGB to BGR - we'll use BGR throughout perception
-        bgr = cv2.cvtColor(rgb_uint8, cv2.COLOR_RGB2BGR)
+        # Apply color enhancement for better visualization
+        from PIL import Image as PILImage, ImageEnhance
+        pil_image = PILImage.fromarray(rgb_uint8)
 
-        # Save directly as BGR (cv2.imwrite will save the BGR data as-is)
-        # The perception pipeline will load and use BGR directly
-        bgr_path = OUTPUT_DIR / f"image_{timestamp}.png"
-        cv2.imwrite(str(bgr_path), bgr)
-        print(f"[Tool: get_camera_observation] ✓ Image saved as BGR: {bgr_path}", file=sys.stderr)
+        # Enhance color saturation and contrast for better visibility
+        enhancer = ImageEnhance.Color(pil_image)
+        pil_image = enhancer.enhance(1.3)  # Boost color saturation by 30%
+
+        enhancer = ImageEnhance.Contrast(pil_image)
+        pil_image = enhancer.enhance(1.2)  # Boost contrast by 20%
+
+        enhancer = ImageEnhance.Brightness(pil_image)
+        pil_image = enhancer.enhance(1.1)  # Slight brightness increase
+
+        # Save enhanced RGB image
+        rgb_path = OUTPUT_DIR / f"image_{timestamp}.png"
+        pil_image.save(rgb_path)
+        print(f"[Tool: get_camera_observation] ✓ Enhanced RGB image saved: {rgb_path}", file=sys.stderr)
 
         # Get depth image
         depth_image = obs.front_depth
@@ -155,15 +233,29 @@ def get_camera_observation() -> dict:
         np.save(pc_path, point_cloud)
         print(f"[Tool: get_camera_observation] ✓ Point cloud saved: shape {point_cloud.shape}", file=sys.stderr)
 
+        # Parse task description to get object names WITH COLORS
+        # Use the stored description from reset_task
+        global _TASK_DESCRIPTION
+        task_desc = _TASK_DESCRIPTION if _TASK_DESCRIPTION else "unknown task"
+
+        task_objects = parse_task_objects(task_desc)
+        detection_prompt = " . ".join(task_objects) if task_objects else "objects"
+
+        print(f"[Tool: get_camera_observation] Task: {task_desc}", file=sys.stderr)
+        print(f"[Tool: get_camera_observation] Detected objects: {task_objects}", file=sys.stderr)
+        print(f"[Tool: get_camera_observation] Suggested prompt: \"{detection_prompt}\"", file=sys.stderr)
+
         return {
             "success": True,
-            "rgb_path": str(bgr_path),  # Key name kept as rgb_path for compatibility
+            "rgb_path": str(rgb_path),
             "depth_path": str(depth_path),
             "intrinsics_path": str(intrinsics_path),
             "pose_path": str(pose_path),
             "pointcloud_path": str(pc_path),
-            "image_size": list(bgr.shape[:2]),
-            "camera_name": "front_camera"
+            "image_size": list(rgb_uint8.shape[:2]),
+            "camera_name": "front_camera",
+            "task_objects": task_objects,
+            "detection_prompt": detection_prompt
         }
 
     except Exception as e:
@@ -536,7 +628,12 @@ def reset_task(task_name: str = "ReachTarget") -> dict:
     Reset environment to start new task
 
     Args:
-        task_name: "ReachTarget" or "PickAndLift"
+        task_name: Task to load. Options:
+            - "ReachTarget": Move gripper to touch target
+            - "PickAndLift": Pick up object and lift it
+            - "PickUpCup": Pick up a cup
+            - "PushButton": Push a button
+            - "PutRubbishInBin": Put rubbish/trash in bin
 
     Returns:
         dict with task description
@@ -545,11 +642,16 @@ def reset_task(task_name: str = "ReachTarget") -> dict:
 
     print(f"[Tool: reset_task] Resetting to {task_name}...", file=sys.stderr)
 
-    # Update task class
-    if task_name == "PickAndLift":
-        _TASK_CLASS = PickAndLift
-    else:
-        _TASK_CLASS = ReachTarget
+    # Update task class based on task name
+    task_map = {
+        "ReachTarget": ReachTarget,
+        "PickAndLift": PickAndLift,
+        "PickUpCup": PickUpCup,
+        "PushButton": PushButton,
+        "PutRubbishInBin": PutRubbishInBin
+    }
+
+    _TASK_CLASS = task_map.get(task_name, ReachTarget)  # Default to ReachTarget if unknown
 
     # Force re-initialization
     global _ENV
@@ -560,6 +662,11 @@ def reset_task(task_name: str = "ReachTarget") -> dict:
 
     try:
         descriptions, _CURRENT_OBS = task.reset()
+
+        # Store task description globally for get_camera_observation to use
+        global _TASK_DESCRIPTION
+        _TASK_DESCRIPTION = descriptions[0]
+
         print(f"[Tool: reset_task] ✓ Reset: {descriptions[0]}", file=sys.stderr)
 
         return {
