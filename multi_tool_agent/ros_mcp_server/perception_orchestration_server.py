@@ -50,11 +50,13 @@ except Exception as e:
 
 def verify_color_from_bbox(image: np.ndarray, bbox: np.ndarray, label: str) -> str:
     """
-    Verify actual color in bounding box using HSV analysis.
+    Verify actual color in bounding box using LAB color space analysis.
+    LAB is more perceptually uniform than HSV and better for color discrimination.
+
     Corrects color labels when GroundingDINO mislabels objects.
 
     Args:
-        image: RGB image (BGR format from cv2)
+        image: BGR image from cv2.imread
         bbox: [x1, y1, x2, y2] bounding box coordinates
         label: Original label from GroundingDINO
 
@@ -74,64 +76,92 @@ def verify_color_from_bbox(image: np.ndarray, bbox: np.ndarray, label: str) -> s
         if roi.size == 0:
             return label
 
-        # Convert to HSV
-        roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        # Convert BGR to LAB color space
+        roi_lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
 
         # Sample center 50% of bbox (avoid edges/shadows)
-        roi_h, roi_w = roi_hsv.shape[:2]
+        roi_h, roi_w = roi_lab.shape[:2]
         if roi_h < 4 or roi_w < 4:
             return label  # Too small to sample
 
-        center_roi = roi_hsv[roi_h//4:3*roi_h//4, roi_w//4:3*roi_w//4]
+        center_roi = roi_lab[roi_h//4:3*roi_h//4, roi_w//4:3*roi_w//4]
         if center_roi.size == 0:
             return label
 
-        # Get median hue (more robust than mean)
-        # Also check saturation to filter out low-saturation (gray/brown)
-        hue_vals = center_roi[:,:,0].flatten()
-        sat_vals = center_roi[:,:,1].flatten()
+        # Extract LAB channels
+        # L: Lightness (0-255, 0=black, 255=white)
+        # a: Green-Red axis (-128 to 127, negative=green, positive=red)
+        # b: Blue-Yellow axis (-128 to 127, negative=blue, positive=yellow)
+        L_vals = center_roi[:,:,0].flatten()
+        a_vals = center_roi[:,:,1].flatten()
+        b_vals = center_roi[:,:,2].flatten()
 
-        # Filter out low saturation pixels (< 50)
-        high_sat_mask = sat_vals > 50
-        if high_sat_mask.sum() < 10:
-            # Not enough colorful pixels - keep original label
-            print(f"[Color Verify] {label}: Low saturation, keeping original", file=sys.stderr)
+        # Filter out very dark or very bright pixels (likely shadows or highlights)
+        # Keep pixels with L in range [30, 225]
+        valid_mask = (L_vals > 30) & (L_vals < 225)
+
+        if valid_mask.sum() < 10:
+            print(f"[Color Verify LAB] {label}: Not enough valid pixels, keeping original", file=sys.stderr)
             return label
 
-        median_hue = np.median(hue_vals[high_sat_mask])
-        median_sat = np.median(sat_vals[high_sat_mask])
+        # Get median values (more robust than mean)
+        median_L = np.median(L_vals[valid_mask])
+        median_a = np.median(a_vals[valid_mask])
+        median_b = np.median(b_vals[valid_mask])
 
-        print(f"[Color Verify] {label}: Hue={median_hue:.1f}, Sat={median_sat:.1f}", file=sys.stderr)
+        # Convert to float for calculations (-128 to 127 range)
+        a_centered = float(median_a) - 128  # Center around 0
+        b_centered = float(median_b) - 128
 
-        # Map hue to color (HSV hue range: 0-180 in OpenCV)
+        print(f"[Color Verify LAB] {label}: L={median_L:.1f}, a={a_centered:.1f}, b={b_centered:.1f}", file=sys.stderr)
+
+        # Calculate chroma (color intensity)
+        chroma = np.sqrt(a_centered**2 + b_centered**2)
+
+        # If chroma is too low, it's gray/achromatic
+        if chroma < 15:
+            print(f"[Color Verify LAB] {label}: Low chroma ({chroma:.1f}), achromatic object", file=sys.stderr)
+            return label
+
+        # Simple LAB color classification using a* and b* thresholds
+        # Adapted for RLBench where red objects have blue tint (b < 0)
         detected_color = None
-        if 0 <= median_hue < 10 or 170 < median_hue <= 180:
-            detected_color = "red"
-        elif 10 <= median_hue < 25:
-            detected_color = "orange"
-        elif 25 <= median_hue < 35:
-            detected_color = "yellow"
-        elif 35 <= median_hue < 85:
+
+        # Red group — RLBench red always has a > 30
+        if a_centered > 30:
+            # RLBench bias: red objects often have b around -60 to -80 (blueish)
+            if b_centered > 40:
+                detected_color = "orange"
+            else:
+                detected_color = "red"  # Includes red with blue tint
+
+        # Green group
+        elif a_centered < -30:
             detected_color = "green"
-        elif 85 <= median_hue < 100:
-            detected_color = "cyan"
-        elif 100 <= median_hue < 130:
+
+        # Blue group (b strongly negative, a near zero)
+        elif b_centered < -30:
             detected_color = "blue"
-        elif 130 <= median_hue < 160:
-            detected_color = "purple"
-        elif 160 <= median_hue < 170:
-            detected_color = "magenta"
+
+        # Yellow group (b strongly positive, a near zero)
+        elif b_centered > 30:
+            detected_color = "yellow"
+
         else:
             # Unclear color - keep original
-            print(f"[Color Verify] {label}: Unclear hue range, keeping original", file=sys.stderr)
+            print(f"[Color Verify LAB] {label}: Unclear color (a={a_centered:.1f}, b={b_centered:.1f}), keeping original", file=sys.stderr)
             return label
+
+        print(f"[Color Verify LAB] {label}: Detected='{detected_color}' (chroma={chroma:.1f})", file=sys.stderr)
 
         # Extract object type from label
         label_lower = label.lower()
-        if "cube" in label_lower:
-            corrected_label = f"{detected_color} cube"
+        if "cube" in label_lower or "block" in label_lower:
+            obj_type = "cube" if "cube" in label_lower else "block"
+            corrected_label = f"{detected_color} {obj_type}"
         elif "sphere" in label_lower or "ball" in label_lower:
-            corrected_label = f"{detected_color} sphere"
+            obj_type = "sphere" if "sphere" in label_lower else "ball"
+            corrected_label = f"{detected_color} {obj_type}"
         elif "tray" in label_lower or "bin" in label_lower:
             obj_type = "tray" if "tray" in label_lower else "bin"
             corrected_label = f"{detected_color} {obj_type}"
@@ -140,70 +170,45 @@ def verify_color_from_bbox(image: np.ndarray, bbox: np.ndarray, label: str) -> s
         elif "trash" in label_lower or "rubbish" in label_lower:
             obj_type = "trash" if "trash" in label_lower else "rubbish"
             corrected_label = f"{detected_color} {obj_type}"
+        elif "button" in label_lower:
+            corrected_label = f"{detected_color} button"
         else:
             # Unknown object type - append detected color
             corrected_label = f"{detected_color} {label}"
 
         if corrected_label.lower() != label.lower():
-            print(f"[Color Verify] ✓ Corrected: '{label}' → '{corrected_label}'", file=sys.stderr)
+            print(f"[Color Verify LAB] ✓ Corrected: '{label}' → '{corrected_label}'", file=sys.stderr)
         else:
-            print(f"[Color Verify] ✓ Verified: '{label}' (correct)", file=sys.stderr)
+            print(f"[Color Verify LAB] ✓ Verified: '{label}' (correct)", file=sys.stderr)
 
         return corrected_label
 
     except Exception as e:
-        print(f"[Color Verify] Error verifying {label}: {e}", file=sys.stderr)
+        print(f"[Color Verify LAB] Error verifying {label}: {e}", file=sys.stderr)
         return label
-
-
+    
 # ==============================================================================
-# Tool: Detect Object 3D
+# Helper: Extract 3D position
 # ==============================================================================
-
-def _verify_color(rgb_image, bbox, expected_color):
-    """
-    Verify if object in bounding box matches expected color.
-
-    Args:
-        rgb_image: RGB image array (H, W, 3)
-        bbox: (x1, y1, x2, y2) bounding box coordinates
-        expected_color: String like "red", "blue", "green", etc.
-
-    Returns:
-        bool: True if color matches, False otherwise
-    """
-    x1, y1, x2, y2 = bbox
-    roi = rgb_image[y1:y2+1, x1:x2+1]
-
-    # Get average color in bbox
-    avg_color = roi.mean(axis=(0, 1))  # [R, G, B]
-
-    # Simple color matching (can be improved)
-    color_thresholds = {
-        'red': lambda rgb: rgb[0] > 120 and rgb[0] > rgb[1] * 1.3 and rgb[0] > rgb[2] * 1.3,
-        'blue': lambda rgb: rgb[2] > 100 and rgb[2] > rgb[0] * 1.2 and rgb[2] > rgb[1] * 1.2,
-        'green': lambda rgb: rgb[1] > 100 and rgb[1] > rgb[0] * 1.2 and rgb[1] > rgb[2] * 1.2,
-        'yellow': lambda rgb: rgb[0] > 150 and rgb[1] > 150 and rgb[2] < 100,
-    }
-
-    if expected_color.lower() in color_thresholds:
-        return color_thresholds[expected_color.lower()](avg_color)
-
-    return True  # Unknown color - accept by default
-
 
 def _extract_3d_position(bbox, depth, point_cloud, fx, fy, cx, cy):
     """
-    Helper function to extract 3D position from a bounding box using depth filtering.
+    Helper function to extract 3D position and bounding box from depth-filtered foreground.
+
+    Uses depth-based foreground segmentation to compute:
+    - Centroid position (mean of foreground points)
+    - 3D bounding box (min/max extents)
+    - Dimensions (width, height, depth)
 
     Args:
-        bbox: (x1, y1, x2, y2) bounding box coordinates
+        bbox: (x1, y1, x2, y2) 2D bounding box coordinates
         depth: Depth map array
         point_cloud: Point cloud array (H, W, 3) in base frame
         fx, fy, cx, cy: Camera intrinsics
 
     Returns:
-        tuple: (X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam)
+        tuple: (X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam, bbox_3d_info)
+        bbox_3d_info: dict with min/max/dims/volume or None
     """
     x1, y1, x2, y2 = bbox
     cx_pixel = (x1 + x2) // 2
@@ -223,21 +228,52 @@ def _extract_3d_position(bbox, depth, point_cloud, fx, fy, cx, cy):
     # Get foreground positions
     foreground_positions = bbox_pc[foreground_mask]
 
-    if len(foreground_positions) > 0:
-        # Use mean of foreground pixels (more robust than single pixel)
+    bbox_3d_info = None
+
+    if len(foreground_positions) > 10:  # Need enough points for reliable bbox
+        # Centroid: mean of foreground pixels
+        X_base, Y_base, Z_base = foreground_positions.mean(axis=0)
+
+        # Compute 3D bounding box extents
+        min_bounds = foreground_positions.min(axis=0)
+        max_bounds = foreground_positions.max(axis=0)
+
+        # Dimensions
+        width = float(max_bounds[0] - min_bounds[0])
+        height = float(max_bounds[1] - min_bounds[1])
+        depth_dim = float(max_bounds[2] - min_bounds[2])
+
+        # Volume
+        volume = width * height * depth_dim
+
+        bbox_3d_info = {
+            'min': min_bounds.tolist(),
+            'max': max_bounds.tolist(),
+            'center': [float(X_base), float(Y_base), float(Z_base)],
+            'dimensions': [width, height, depth_dim],
+            'volume': volume,
+            'num_points': len(foreground_positions)
+        }
+
+    elif len(foreground_positions) > 0:
+        # Few points - use mean but no reliable bbox
         X_base, Y_base, Z_base = foreground_positions.mean(axis=0)
     else:
         # Fallback to center pixel if filtering fails
         X_base, Y_base, Z_base = point_cloud[cy_pixel, cx_pixel]
 
-    # Compute camera frame position
+    # Compute camera frame position (for backward compatibility)
     depth_value = depth[cy_pixel, cx_pixel]
     X_cam = (cx_pixel - cx) * depth_value / fx
     Y_cam = (cy_pixel - cy) * depth_value / fy
     Z_cam = depth_value
 
-    return X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam
+    return X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam, bbox_3d_info
 
+
+# ==============================================================================
+# Main Task Object Detection
+# ==============================================================================
 
 @mcp.tool()
 def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
@@ -265,12 +301,12 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
 
     try:
         # Load images and calibration data
-        # Image is saved as RGB by RLBench server - GroundingDINO expects RGB
+        # Image is saved as BGR by RLBench server (cv2.imwrite format)
         depth = np.load(depth_path)
         intrinsics = np.load(intrinsics_path)  # [fx, fy, cx, cy]
         camera_pose = np.load(pose_path)  # 4x4 matrix: base to camera
 
-        # Load image using GroundingDINO's load_image (handles RGB correctly)
+        # Load image using GroundingDINO's load_image (returns BGR from cv2.imread)
         image_source, image_transformed = load_image(rgb_path)
 
         height, width = image_source.shape[:2]
@@ -288,8 +324,9 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
             print(f"[Tool: detect_object_3d] Using GroundingDINO with RGB color space", file=sys.stderr)
 
             # Run detection
-            BOX_THRESHOLD = 0.35
-            TEXT_THRESHOLD = 0.25
+            # Lowered thresholds to detect small/low-contrast objects (e.g., crumpled paper)
+            BOX_THRESHOLD = 0.20  # Was 0.35, reduced for small objects
+            TEXT_THRESHOLD = 0.15  # Was 0.25, more lenient text matching
 
             boxes, logits, phrases = predict(
                 model=GROUNDING_DINO_MODEL,
@@ -388,24 +425,35 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                 for idx, detection in enumerate(all_detections):
                     bbox = detection['bbox']
 
-                    # Verify and correct color using HSV analysis
+                    # Verify and correct color using LAB analysis
                     original_phrase = detection['phrase']
                     verified_phrase = verify_color_from_bbox(image_source, np.array(bbox), original_phrase)
 
-                    X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam = _extract_3d_position(
+                    X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam, bbox_3d_info = _extract_3d_position(
                         bbox, depth, point_cloud, fx, fy, cx, cy
                     )
 
-                    objects_with_3d.append({
+                    obj_dict = {
                         'phrase': verified_phrase,  # Use color-verified phrase
                         'confidence': detection['confidence'],
                         'position_3d': [float(X_base), float(Y_base), float(Z_base)],
                         'position_camera_frame': [float(X_cam), float(Y_cam), float(Z_cam)],
                         'detection_2d': {'x': int(detection['center'][0]), 'y': int(detection['center'][1])},
-                        'bbox': detection['bbox']
-                    })
+                        'bbox_2d': detection['bbox']
+                    }
 
-                    print(f"[Tool: detect_object_3d]   [{idx}] '{verified_phrase}' 3D pos: [{X_base:.3f}, {Y_base:.3f}, {Z_base:.3f}]", file=sys.stderr)
+                    # Add 3D bounding box info if available
+                    if bbox_3d_info is not None:
+                        obj_dict['bbox_3d'] = bbox_3d_info
+
+                    objects_with_3d.append(obj_dict)
+
+                    # Enhanced logging with 3D bbox info
+                    if bbox_3d_info:
+                        dims = bbox_3d_info['dimensions']
+                        print(f"[Tool: detect_object_3d]   [{idx}] '{verified_phrase}' pos=[{X_base:.3f}, {Y_base:.3f}, {Z_base:.3f}], dims=[{dims[0]:.3f}, {dims[1]:.3f}, {dims[2]:.3f}]m", file=sys.stderr)
+                    else:
+                        print(f"[Tool: detect_object_3d]   [{idx}] '{verified_phrase}' 3D pos: [{X_base:.3f}, {Y_base:.3f}, {Z_base:.3f}]", file=sys.stderr)
 
                 # Use highest confidence detection for primary return values (backward compatible)
                 best_object = objects_with_3d[best_idx]
@@ -413,7 +461,7 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                 X_cam, Y_cam, Z_cam = best_object['position_camera_frame']
 
             elif 'x1' in locals() and 'y1' in locals():  # Single detection fallback
-                X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam = _extract_3d_position(
+                X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam, bbox_3d_info = _extract_3d_position(
                     (x1, y1, x2, y2), depth, point_cloud, fx, fy, cx, cy
                 )
             else:

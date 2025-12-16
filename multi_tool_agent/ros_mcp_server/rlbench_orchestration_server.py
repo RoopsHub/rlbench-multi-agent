@@ -27,7 +27,7 @@ from rlbench.action_modes.action_mode import MoveArmThenGripper
 from rlbench.action_modes.arm_action_modes import EndEffectorPoseViaIK, EndEffectorPoseViaPlanning
 from rlbench.action_modes.gripper_action_modes import Discrete
 from rlbench.observation_config import ObservationConfig
-from rlbench.tasks import ReachTarget, PickAndLift, PickUpCup, PushButton, PutRubbishInBin
+from rlbench.tasks import ReachTarget, PickAndLift, PickUpCup, PushButton, PutRubbishInBin, SlideBlockToTarget
 from rlbench.backend.exceptions import InvalidActionError
 
 # ==============================================================================
@@ -125,6 +125,20 @@ def parse_task_objects(task_description: str) -> list:
         ('target', 'sphere'),  # "target" usually refers to sphere in reach tasks
     ]
 
+    # Synonym expansion for better GroundingDINO detection
+    # Maps object names to comma-separated synonyms (visual + semantic terms)
+
+    # Task-specific optimization: For PutRubbishInBin, use precise descriptors
+    is_trash_task = 'rubbish' in desc_lower or ('bin' in desc_lower and 'trash' in desc_lower)
+
+    object_synonyms = {
+        'bin': 'basket, bin, container',  # Visual (basket) helps detect wire mesh
+        'trash': 'crumpled silver paper' if is_trash_task else 'paper, trash, crumpled paper, rubbish, garbage',
+        'button': 'button, switch',
+        'sphere': 'sphere, ball',
+        'cube': 'cube, block',
+    }
+
     # Extract objects with their colors
     for keyword, obj_name in object_keywords:
         if keyword in desc_lower:
@@ -141,11 +155,18 @@ def parse_task_objects(task_description: str) -> list:
                     relevant_color = color
                     break
 
-            # Build the detection phrase
+            # Expand with synonyms for better detection
+            obj_expanded = object_synonyms.get(obj_name, obj_name)
+
+            # Build the detection phrase with color
             if relevant_color:
-                obj_with_color = f"{relevant_color} {obj_name}"
+                # Apply color to all synonyms
+                # Example: "red" + "basket, bin" → "red basket, red bin"
+                synonyms = obj_expanded.split(', ')
+                colored_synonyms = [f"{relevant_color} {syn}" for syn in synonyms]
+                obj_with_color = ', '.join(colored_synonyms)
             else:
-                obj_with_color = obj_name
+                obj_with_color = obj_expanded
 
             if obj_with_color not in objects:  # Avoid duplicates
                 objects.append(obj_with_color)
@@ -179,28 +200,32 @@ def get_camera_observation() -> dict:
         # Generate timestamp in YYYYMMDD_HHMMSS format
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Get RGB image - save as RGB since GroundingDINO expects RGB
+        # Get RGB image and convert to BGR for OpenCV
         rgb = obs.front_rgb
-        rgb_uint8 = (rgb * 255).astype(np.uint8)
+        if rgb.dtype == np.float32 or rgb.dtype == np.float64:
+            rgb_uint8 = (rgb * 255).astype(np.uint8)
+        else:
+            rgb_uint8 = rgb
 
-        # Apply color enhancement for better visualization
-        from PIL import Image as PILImage, ImageEnhance
-        pil_image = PILImage.fromarray(rgb_uint8)
+        # Convert RGB to BGR for OpenCV (matching demo code approach)
+        bgr = cv2.cvtColor(rgb_uint8, cv2.COLOR_RGB2BGR)
 
-        # Enhance color saturation and contrast for better visibility
-        enhancer = ImageEnhance.Color(pil_image)
-        pil_image = enhancer.enhance(1.3)  # Boost color saturation by 30%
-
-        enhancer = ImageEnhance.Contrast(pil_image)
-        pil_image = enhancer.enhance(1.2)  # Boost contrast by 20%
-
-        enhancer = ImageEnhance.Brightness(pil_image)
-        pil_image = enhancer.enhance(1.1)  # Slight brightness increase
-
-        # Save enhanced RGB image
+        # Save with OpenCV
         rgb_path = OUTPUT_DIR / f"image_{timestamp}.png"
-        pil_image.save(rgb_path)
-        print(f"[Tool: get_camera_observation] ✓ Enhanced RGB image saved: {rgb_path}", file=sys.stderr)
+        cv2.imwrite(str(rgb_path), bgr)
+        print(f"[Tool: get_camera_observation] ✓ BGR image saved: {rgb_path}", file=sys.stderr)
+
+        # # OPTIONAL: PIL enhancement (commented out for now)
+        # from PIL import Image as PILImage, ImageEnhance
+        # pil_image = PILImage.fromarray(rgb_uint8)
+        # enhancer = ImageEnhance.Color(pil_image)
+        # pil_image = enhancer.enhance(1.3)  # Boost color saturation by 30%
+        # enhancer = ImageEnhance.Contrast(pil_image)
+        # pil_image = enhancer.enhance(1.2)  # Boost contrast by 20%
+        # enhancer = ImageEnhance.Brightness(pil_image)
+        # pil_image = enhancer.enhance(1.1)  # Slight brightness increase
+        # rgb_enhanced = np.array(pil_image)
+        # bgr = cv2.cvtColor(rgb_enhanced, cv2.COLOR_RGB2BGR)
 
         # Get depth image
         depth_image = obs.front_depth
@@ -557,7 +582,9 @@ def get_target_position() -> dict:
     Get ground truth position of the target object (for debugging perception)
 
     For ReachTarget: returns target sphere position
-    For PickAndLift: returns target block position AND lift target position
+    For PickAndLift: returns target block position AND lift target position (sphere)
+    For PutRubbishInBin: returns rubbish position AND lift target position (bin)
+    For SlideBlockToTarget: returns block position AND target position
 
     Returns:
         dict with target position(s) in base frame
@@ -569,9 +596,31 @@ def get_target_position() -> dict:
     try:
         # Get underlying task object from TaskEnvironment wrapper
         actual_task = task._task if hasattr(task, '_task') else task
+        task_name = actual_task.get_name()
 
-        # Get target object from task
-        if hasattr(actual_task, 'target'):
+        # Get target object from task - check by name first for ambiguous cases
+        if 'slide' in task_name.lower():
+            # SlideBlockToTarget task
+            from pyrep.objects.shape import Shape
+            from pyrep.objects.proximity_sensor import ProximitySensor
+
+            block = Shape('block')
+            target = ProximitySensor('success')
+            block_pos = block.get_position()
+            target_pos = target.get_position()
+
+            print(f"[Tool: get_target_position] Block: [{block_pos[0]:.3f}, {block_pos[1]:.3f}, {block_pos[2]:.3f}]", file=sys.stderr)
+            print(f"[Tool: get_target_position] Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]", file=sys.stderr)
+
+            return {
+                "success": True,
+                "task": "SlideBlockToTarget",
+                "block_position": block_pos.tolist(),
+                "position": target_pos.tolist(),
+                "note": "Block position is starting position. Target position is where to slide the block."
+            }
+
+        elif hasattr(actual_task, 'target'):
             # ReachTarget task
             target_pos = actual_task.target.get_position()
             target_name = "target sphere"
@@ -608,6 +657,53 @@ def get_target_position() -> dict:
                 "lift_target_position": lift_target_pos.tolist() if lift_target_pos is not None else None,
                 "note": "Block position is for grasping. Lift target is where to move after grasping."
             }
+
+        elif hasattr(actual_task, 'rubbish'):
+            # PutRubbishInBin task
+            rubbish_pos = actual_task.rubbish.get_position()
+
+            # Get bin position - try multiple approaches
+            bin_pos = None
+
+            # Try 1: success_detector attribute
+            if hasattr(actual_task, 'success_detector'):
+                bin_pos = actual_task.success_detector.get_position()
+
+            # Try 2: Look for success sensor in PyRep (used by PutRubbishInBin)
+            if bin_pos is None:
+                try:
+                    from pyrep.objects.proximity_sensor import ProximitySensor
+                    success_sensor = ProximitySensor('success')
+                    bin_pos = success_sensor.get_position()
+                    print(f"[Tool: get_target_position] Found bin via ProximitySensor('success')", file=sys.stderr)
+                except:
+                    pass
+
+            # Try 3: Look for 'bin' shape object
+            if bin_pos is None:
+                try:
+                    from pyrep.objects.shape import Shape
+                    bin_shape = Shape('bin')
+                    bin_pos = bin_shape.get_position()
+                    print(f"[Tool: get_target_position] Found bin via Shape('bin')", file=sys.stderr)
+                except:
+                    pass
+
+            if bin_pos is not None:
+                print(f"[Tool: get_target_position] Rubbish: [{rubbish_pos[0]:.3f}, {rubbish_pos[1]:.3f}, {rubbish_pos[2]:.3f}]", file=sys.stderr)
+                print(f"[Tool: get_target_position] Bin: [{bin_pos[0]:.3f}, {bin_pos[1]:.3f}, {bin_pos[2]:.3f}]", file=sys.stderr)
+            else:
+                print(f"[Tool: get_target_position] Rubbish: [{rubbish_pos[0]:.3f}, {rubbish_pos[1]:.3f}, {rubbish_pos[2]:.3f}]", file=sys.stderr)
+                print(f"[Tool: get_target_position] ⚠ No bin position found - tried success_detector, ProximitySensor('success'), Shape('bin')", file=sys.stderr)
+
+            return {
+                "success": True,
+                "task": "PutRubbishInBin",
+                "rubbish_position": rubbish_pos.tolist(),
+                "lift_target_position": bin_pos.tolist() if bin_pos is not None else None,
+                "note": "Rubbish position is for grasping. Lift target (bin) is where to place the rubbish."
+            }
+
         else:
             return {"success": False, "error": f"Task has no target object. Available attributes: {dir(actual_task)}"}
 
@@ -648,7 +744,8 @@ def reset_task(task_name: str = "ReachTarget") -> dict:
         "PickAndLift": PickAndLift,
         "PickUpCup": PickUpCup,
         "PushButton": PushButton,
-        "PutRubbishInBin": PutRubbishInBin
+        "PutRubbishInBin": PutRubbishInBin,
+        "SlideBlockToTarget": SlideBlockToTarget
     }
 
     _TASK_CLASS = task_map.get(task_name, ReachTarget)  # Default to ReachTarget if unknown
