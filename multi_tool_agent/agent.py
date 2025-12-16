@@ -9,7 +9,6 @@ Supported Tasks:
     - PickAndLift: Pick object and lift to target height
     - PushButton: Push a button
     - PutRubbishInBin: Pick trash and place in bin
-    - SlideBlockToTarget: Push block to target location
 
 Usage:
     # In ADK web interface - conversational human approval
@@ -99,7 +98,6 @@ TASK_DEFINITIONS = """
 | PickAndLift | pick and lift, lift block/cube | Colored blocks + target sphere | Open→Close→Keep closed |
 | PushButton | push/press button | Button panel | CLOSE first, push with fist |
 | PutRubbishInBin | put rubbish/trash in bin | Trash object + bin | Open→Close→Open (release) |
-| SlideBlockToTarget | slide block, push block | Block + target | CLOSE, push motion |
 """
 
 MOTION_SEQUENCES = """
@@ -114,17 +112,19 @@ MOTION_SEQUENCES = """
 ```
 
 ### PickAndLift (Gripper: Open→Close→Closed)
-**CRITICAL: Move cube TO sphere's full XYZ position!**
+**Detect both cube AND sphere with `detect_object_3d("red cube . sphere", ...)` - Use ground truth for reference only**
+**CRITICAL: Move cube TO detected sphere's full XYZ position!**
 ```
 1. control_gripper("open")
 2. move_to_position(cube_x, cube_y, cube_z + 0.15)       # above cube
-3. move_to_position(cube_x, cube_y, cube_z + 0.02)       # grasp height
-4. control_gripper("close")
-5. move_to_position(sphere_x, sphere_y, sphere_z)        # DIRECTLY to sphere XYZ!
+3. move_to_position(cube_x, cube_y, cube_z + 0.015)       # grasp height
+4. control_gripper("close")                               # GRASP cube - KEEP CLOSED!
+5. move_to_position(sphere_x, sphere_y, sphere_z)        # DIRECTLY to detected sphere XYZ!
 → COMPLETE (keep gripper closed)
 ```
-⚠️ Sphere is translucent! Use `get_target_position()['lift_target_position']` for sphere XYZ.
+⚠️ **Use detected sphere position from perception**, NOT ground truth! Both cube and sphere are detected via GroundingDINO.
 ⚠️ No intermediate lift step - move directly from grasp to sphere position.
+⚠️ Gripper stays CLOSED at end (holding cube at target).
 
 ### PushButton (Gripper: CLOSE FIRST)
 ```
@@ -136,7 +136,7 @@ MOTION_SEQUENCES = """
 6. move_to_position(btn_x, btn_y, btn_z + 0.1)           # retract
 → COMPLETE
 ```
-⚠️ Often task completes at contact (step 3). Check result before attempting push.
+Often task completes at contact (step 3). Check result before attempting push.
 
 ### PutRubbishInBin (Gripper: Open→Close→Open)
 **Detect both trash AND bin with `detect_object_3d("trash . bin", ...)` - Use ground truth for reference only**
@@ -151,23 +151,7 @@ MOTION_SEQUENCES = """
 8. move_to_position(bin_x, bin_y, bin_z + 0.15)          # retract upward
 → COMPLETE
 ```
-⚠️ **CRITICAL:** Gripper must stay CLOSED from step 4 through step 6. Only open at step 7 to release trash into bin.
-
-### SlideBlockToTarget (Gripper: CLOSE, push motion)
-**Get target position from ground truth: `get_target_position()['position']`**
-```
-1. control_gripper("close")                               # FIRST! Push with fist
-2. move_to_position(block_x, block_y, block_z + 0.1)     # above block
-3. move_to_position(block_x, block_y, block_z)           # contact block
-4. Calculate push direction: direction = normalize(target_pos - block_pos)
-5. Push in increments toward target:
-   - push_pos = block_pos + direction * 0.05
-   - move_to_position(push_x, push_y, block_z)
-   - Repeat until block near target
-6. lift_gripper(0.1)                                      # retract
-→ COMPLETE
-```
-⚠️ Sliding requires incremental pushing - monitor block position and adjust.
+**CRITICAL:** Gripper must stay CLOSED from step 4 through step 6. Only open at step 7 to release trash into bin.
 """
 
 DETECTION_STRATEGY = """
@@ -180,17 +164,13 @@ DETECTION_STRATEGY = """
 | Task | Detection | Position Source |
 |------|-----------|-----------------|
 | ReachTarget | `detection_prompt` | `position_3d` |
-| PickAndLift | Cube: `detection_prompt` | Cube: `position_3d`, Sphere: `get_target_position()['lift_target_position']` |
+| PickAndLift | `"red cube . sphere"` (multi-object) | Both from `objects[]` array (detected positions) |
 | PushButton | `detection_prompt` | `position_3d` |
 | PutRubbishInBin | `"trash . bin"` (multi-object) | Both from `objects[]` array (detected positions) |
-| SlideBlockToTarget | Block: `detection_prompt` | Block: `position_3d`, Target: `get_target_position()['position']` |
-
-**Ground Truth Required:**
-- **PickAndLift:** Sphere is translucent → use `get_target_position()['lift_target_position']`
-- **SlideBlockToTarget:** Target position from `get_target_position()['position']`
 
 **Ground Truth for Reference Only:**
-- **PutRubbishInBin:** Use detected positions for both trash and bin. Ground truth available for comparison but NOT used in motion.
+- **All tasks:** Ground truth available for comparison/validation but NOT used in motion execution.
+- System relies on perception (GroundingDINO + LAB color verification) for all object localization.
 
 **Multi-object syntax:** `"object1 . object2"` (period + space separator)
 """
@@ -206,7 +186,7 @@ sensing_agent = Agent(
     instruction="""You are the sensing agent. Capture sensor data for perception.
 
 ## TOOLS
-- `reset_task(task_name)` - Options: ReachTarget, PickAndLift, PushButton, PutRubbishInBin, SlideBlockToTarget
+- `reset_task(task_name)` - Options: ReachTarget, PickAndLift, PushButton, PutRubbishInBin
 - `get_camera_observation()` - Returns file paths + `detection_prompt`
 - `get_target_position()` - Ground truth positions
 - `get_current_state()` - Gripper state
@@ -215,7 +195,7 @@ sensing_agent = Agent(
 1. Read task type from approved plan
 2. `reset_task(task_name)`
 3. `get_camera_observation()` → capture paths + detection_prompt
-4. `get_target_position()` → ground truth (PickAndLift sphere required, PutRubbishInBin for reference only)
+4. `get_target_position()` → ground truth (for reference/validation only)
 5. Report all paths
 
 ## OUTPUT
@@ -293,7 +273,7 @@ motion_agent = Agent(
 3. Execute exact motion sequence for task type
 4. Report each step result
 
-⚠️ **GRIPPER STATE:** Once gripper is closed (PickAndLift, PutRubbishInBin), it MUST stay closed during all transport movements until explicitly opened at release position.
+**GRIPPER STATE:** Once gripper is closed (PickAndLift, PutRubbishInBin), it MUST stay closed during all transport movements until explicitly opened at release position.
 
 ## OUTPUT
 ```
@@ -354,8 +334,31 @@ root_agent = Agent(
 ```
 1. Parse user request → identify task type
 2. Generate execution plan with exact motion sequence
-3. Present plan clearly
-4. WAIT for user approval ("approved", "yes", "proceed")
+3. Present enhanced plan:
+   - Task analysis with risk level
+   - Motion sequence with WHY justifications
+   - Adjustable parameters table
+4. WAIT for user approval or parameter adjustments
+
+HANDLING USER RESPONSES:
+- If user approves ("approved", "yes", "proceed") → proceed to Phase 2
+- If user requests parameter adjustment (e.g., "increase grasp offset to 0.02m"):
+  a. Parse adjustment: extract parameter name and new value
+  b. Validate: check if value is within allowed range
+  c. Update plan: recalculate affected steps with new parameter
+  d. Re-present updated plan
+  e. WAIT for final approval (DO NOT execute without "approved")
+```
+
+PARAMETER DEFINITIONS BY TASK:
+- **PutRubbishInBin**: approach_height (0.10-0.20m), grasp_offset (0.01-0.03m), bin_drop_height (0.05-0.15m)
+- **PickAndLift**: approach_height (0.10-0.20m), grasp_offset (0.01-0.03m)
+- **PushButton**: approach_height (0.05-0.15m), push_depth (0.001-0.005m)
+- **ReachTarget**: approach_height (0.05-0.15m)
+
+RISK LEVEL CLASSIFICATION:
+- LOW: ReachTarget, PushButton (simple, no grasping or minimal risk)
+- MEDIUM: PickAndLift, PutRubbishInBin (grasping, controlled environment)
 ```
 
 ### Phase 2: Execution (after approval)
@@ -363,15 +366,17 @@ root_agent = Agent(
 1. SENSING
    - reset_task(task_name)
    - get_camera_observation() → save detection_prompt
-   - get_target_position() → ground truth (required: PickAndLift; reference: PutRubbishInBin)
+   - get_target_position() → ground truth (for reference/validation only)
 
 2. PERCEPTION
    - detect_object_3d(detection_prompt, paths...)
+   - For PickAndLift: use "red cube . sphere" to detect both objects
    - For PutRubbishInBin: use "trash . bin" to detect both objects
    - Extract positions from objects[] array based on task type
 
 3. MOTION
    - Execute exact sequence from MOTION SEQUENCES
+   - Use detected positions (NOT ground truth)
    - Report each step
 ```
 
@@ -379,18 +384,20 @@ root_agent = Agent(
 
 ## CRITICAL TASK RULES
 
-### PickAndLift - MOST COMMON ERROR!
+### PickAndLift - DETECT BOTH OBJECTS!
 ```
-❌ WRONG: Only lift vertically, ignore sphere XY
-✅ RIGHT: Move cube TO sphere's full XYZ position
+WRONG: Only lift vertically, ignore sphere XY
+RIGHT: Move cube TO detected sphere's full XYZ position
 
 Example:
-  Cube at [0.027, -0.360, 0.775]
-  Sphere at [0.365, -0.103, 1.000]
+  Cube detected at [0.064, 0.227, 0.773]
+  Sphere detected at [0.207, 0.210, 0.996]
 
-  Motion: Grasp cube → move_to_position(0.365, -0.103, 1.000)  # DIRECTLY to sphere!
+  Motion: Grasp cube → move_to_position(0.207, 0.210, 0.996)  # DIRECTLY to detected sphere!
 ```
-- Sphere is translucent → use `get_target_position()['lift_target_position']`
+- Detect BOTH cube AND sphere: detect_object_3d("red cube . sphere", ...)
+- Extract both positions from objects[] array in response
+- Move cube to detected sphere position (NOT ground truth!)
 - Keep gripper CLOSED at end
 - **No intermediate lift step** - move directly from grasp to sphere position
 
@@ -403,7 +410,7 @@ Example:
 - Drop sequence: bin_z+0.10 → open gripper → bin_z+0.15 (retract)
 - Ground truth available for reference/validation only
 ```
-⚠️ **CRITICAL:** Gripper MUST stay closed after grasping (step 4) until reaching bin release position (step 7). Do NOT open gripper during lift or transport.
+**CRITICAL:** Gripper MUST stay closed after grasping (step 4) until reaching bin release position (step 7). Do NOT open gripper during lift or transport.
 
 ### ReachTarget vs PushButton
 ```
@@ -413,7 +420,7 @@ PushButton: Gripper CLOSES FIRST (push with fist)
 
 ### PushButton - Task Completion Check!
 ```
-⚠️ CRITICAL: Check task_completed flag after contact step!
+CRITICAL: Check task_completed flag after contact step!
 - Task often completes when gripper touches button (step 3)
 - If task_completed=true → skip push step, go directly to retract
 - Only attempt shallow push (btn_z - 0.003) if task NOT completed
@@ -459,15 +466,16 @@ Plan:
 
 Execution:
   1. reset_task("PickAndLift")
-  2. get_camera_observation() → detection_prompt="red cube"
-  3. get_target_position() → lift_target_position=[0.365, -0.103, 1.0]
-  4. detect_object_3d("red cube", ...) → cube=[0.027, -0.36, 0.775]
-  5. control_gripper("open")
-  6. move_to_position(0.027, -0.36, 0.925)   # above cube
-  7. move_to_position(0.027, -0.36, 0.795)   # grasp
-  8. control_gripper("close")
-  9. move_to_position(0.365, -0.103, 1.0)    # DIRECTLY to sphere XYZ!
-  → SUCCESS (gripper stays closed)
+  2. get_camera_observation() → detection_prompt (for reference)
+  3. get_target_position() → ground truth (for reference/validation only)
+  4. detect_object_3d("red cube . sphere", ...) → objects[0]=cube, objects[1]=sphere
+  5. Extract: cube=[0.064, 0.227, 0.773], sphere=[0.207, 0.210, 0.996]
+  6. control_gripper("open")
+  7. move_to_position(0.064, 0.227, 0.923)   # above cube (cube_z + 0.15)
+  8. move_to_position(0.064, 0.227, 0.773)   # grasp (cube_z + 0.015)
+  9. control_gripper("close")                # GRASP - keep closed!
+  10. move_to_position(0.207, 0.210, 0.996)  # DIRECTLY to detected sphere XYZ!
+  → SUCCESS (gripper stays closed, using detected positions)
 ```
 
 ### Example 3: PushButton
@@ -490,46 +498,172 @@ Execution:
   → SUCCESS
 ```
 
-### Example 4: PutRubbishInBin
+### Example 4: PutRubbishInBin (ENHANCED HITL)
 ```
 User: "Put the rubbish in the bin"
 
-Plan:
-  Task: PutRubbishInBin | Target: trash→bin | Gripper: Open→Close→Open
+PHASE 1: PLANNING (Enhanced Approval)
+---
+## Task Analysis
+- **Task Type:** PutRubbishInBin
+- **Target Objects:** trash (crumpled paper), bin (basket)
+- **Gripper Strategy:** Open → Close → Open (release)
+- **Risk Level:** MEDIUM (grasping task in controlled environment)
 
-Execution:
-  1. reset_task("PutRubbishInBin")
-  2. get_camera_observation() → detection_prompt (for reference)
-  3. get_target_position() → ground truth (for reference/validation only)
-  4. detect_object_3d("trash . bin", ...) → objects[0]=trash, objects[1]=bin
-  5. Extract: trash=[0.428, 0.338, 0.757], bin=[0.439, 0.336, 0.834]
-  6. control_gripper("open")
-  7. move_to_position(0.428, 0.338, 0.907)  # above trash (trash_z + 0.15)
-  8. move_to_position(0.428, 0.338, 0.787)  # grasp height (trash_z + 0.01)
-  9. control_gripper("close")               # GRASP - keep closed!
-  10. move_to_position(0.428, 0.338, 0.907) # lift trash (gripper CLOSED)
-  11. move_to_position(0.439, 0.336, 0.934) # approach bin (gripper CLOSED)
-  12. control_gripper("open")               # release trash
-  13. move_to_position(0.439, 0.336, 0.984) # retract (bin_z + 0.15)
-  → SUCCESS (gripper stays closed from step 9 through 11)
+## Motion Plan with Justifications
+
+1. control_gripper("open")
+   WHY: Prepare gripper for grasping, ensure fingers are clear
+
+2. move_to_position(trash_x, trash_y, trash_z + 0.15)
+   WHY: Safe approach height prevents collision with scene objects
+
+3. move_to_position(trash_x, trash_y, trash_z + 0.015)
+   WHY: Grasp height optimized for crumpled paper (1.5cm clearance avoids IK/collision)
+
+4. control_gripper("close")
+   WHY: Secure grasp on trash object
+   CRITICAL: Gripper MUST remain closed until step 7
+
+5. move_to_position(trash_x, trash_y, trash_z + 0.15)
+   WHY: Lift trash clear of surrounding objects (gripper CLOSED)
+
+6. move_to_position(bin_x, bin_y, bin_z + 0.10)
+   WHY: Position 10cm above bin for safe release (gripper CLOSED)
+
+7. control_gripper("open")
+   WHY: Release trash into bin
+
+8. move_to_position(bin_x, bin_y, bin_z + 0.15)
+   WHY: Retract gripper clear of bin
+
+## Adjustable Parameters
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| Approach Height | 0.15m | [0.10-0.20]m | Height above objects for safe approach |
+| Grasp Offset | 0.015m | [0.01-0.03]m | Clearance above trash for grasping |
+| Bin Drop Height | 0.10m | [0.05-0.15]m | Release height above bin rim |
+
+**To modify:** Reply with adjustment (e.g., "increase grasp offset to 0.02m")
+**To approve:** Reply "approved" or "proceed"
+
+NOTE: Object positions will be detected after approval.
+
+**AWAITING APPROVAL**
+---
+
+User: "approved"
+
+PHASE 2: EXECUTION
+---
+### Sensing
+  1. reset_task("PutRubbishInBin") → success
+  2. get_camera_observation() → paths captured
+  3. get_target_position() → ground truth for reference
+
+### Perception
+  4. detect_object_3d("trash . bin", ...) → 2 objects detected
+  5. Extract positions:
+     - trash: [0.428, 0.338, 0.757] (conf: 0.85)
+     - bin: [0.439, 0.336, 0.834] (conf: 0.91)
+
+### Motion (Using approved parameters: default values)
+  6. control_gripper("open") → success
+  7. move_to_position(0.428, 0.338, 0.907) → success (approach)
+  8. move_to_position(0.428, 0.338, 0.772) → success (grasp height)
+  9. control_gripper("close") → success (grasped)
+  10. move_to_position(0.428, 0.338, 0.907) → success (lift)
+  11. move_to_position(0.439, 0.336, 0.934) → success (to bin)
+  12. control_gripper("open") → success (release)
+  13. move_to_position(0.439, 0.336, 0.984) → success (retract)
+
+## Result: SUCCESS
+Task completed successfully with default parameters.
+```
+
+### Example 4b: PutRubbishInBin (With Parameter Adjustment)
+```
+User: "Put the rubbish in the bin"
+
+[Agent presents enhanced plan with default parameters]
+
+User: "increase grasp offset to 0.02m"
+
+Agent: "Updating parameters:
+- Grasp Offset: 0.015m → 0.02m ✓ (within range [0.01-0.03]m)
+
+Updated Step 3:
+3. move_to_position(trash_x, trash_y, trash_z + 0.02)
+   WHY: Grasp height with increased clearance (2cm) for safer approach
+
+All other steps remain unchanged. Please confirm: Reply 'approved' to proceed."
+
+User: "approved"
+
+[Agent executes with grasp_offset = 0.02m]
+  → Step 8 uses: move_to_position(0.428, 0.338, 0.777)  # trash_z + 0.02
 ```
 
 ---
 
 ## RESPONSE FORMAT
 
-**Planning Phase:**
+**Planning Phase (BEFORE Perception):**
 ```markdown
 ## Task Analysis
 - **Task Type:** [type]
-- **Target:** [object description]
+- **Target Objects:** [what will be detected]
 - **Gripper Strategy:** [Open/Close sequence]
+- **Risk Level:** [LOW/MEDIUM/HIGH based on task complexity]
 
-## Execution Plan
-[Numbered steps with exact tool calls]
+## Motion Plan with Justifications
+
+Follow the exact motion sequence from MOTION SEQUENCES section, adding WHY for each step:
+
+Example for PutRubbishInBin:
+1. control_gripper("open")
+   WHY: Prepare gripper for grasping, ensure fingers are clear
+
+2. move_to_position(trash_x, trash_y, trash_z + 0.15)
+   WHY: Safe approach height prevents collision with scene objects
+
+3. move_to_position(trash_x, trash_y, trash_z + 0.015)
+   WHY: Grasp height optimized (1.5cm clearance avoids IK/collision)
+
+4. control_gripper("close")
+   WHY: Secure grasp on trash object
+   CRITICAL: Gripper MUST remain closed until step 7
+
+5. move_to_position(trash_x, trash_y, trash_z + 0.15)
+   WHY: Lift trash clear of surrounding objects (gripper CLOSED)
+
+6. move_to_position(bin_x, bin_y, bin_z + 0.10)
+   WHY: Position 10cm above bin for safe release (gripper CLOSED)
+
+7. control_gripper("open")
+   WHY: Release trash into bin
+
+8. move_to_position(bin_x, bin_y, bin_z + 0.15)
+   WHY: Retract gripper clear of bin
+
+## Adjustable Parameters
+
+Show task-specific parameters that can be modified:
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| Approach Height | 0.15m | [0.10-0.20]m | Height above objects for safe approach |
+| Grasp Offset | 0.015m | [0.01-0.03]m | Clearance above object (for trash/paper) |
+| Bin Drop Height | 0.10m | [0.05-0.15]m | Release height above bin rim |
+
+**To modify parameters:** Reply with adjustment, e.g., "increase grasp offset to 0.02m"
+**To approve as-is:** Reply "approved" or "proceed"
+
+NOTE: Actual object positions will be determined by perception after approval.
 
 ---
-**AWAITING APPROVAL** - Reply "approved" to proceed.
+**AWAITING APPROVAL** - Reply "approved" to proceed, or suggest parameter adjustments.
 ```
 
 **Execution Phase:**
@@ -584,7 +718,6 @@ if __name__ == "__main__":
     print("  - PickAndLift: 'Pick up the red block'")
     print("  - PushButton: 'Push the button'")
     print("  - PutRubbishInBin: 'Put rubbish in bin'")
-    print("  - SlideBlockToTarget: 'Slide the block to target'")
     print("\nAgents:")
     print(f"  1. {root_agent.name} (planning + orchestration with human-in-the-loop)")
     print(f"  2. {sensing_agent.name}")
