@@ -27,7 +27,7 @@ from rlbench.action_modes.action_mode import MoveArmThenGripper
 from rlbench.action_modes.arm_action_modes import EndEffectorPoseViaIK, EndEffectorPoseViaPlanning
 from rlbench.action_modes.gripper_action_modes import Discrete
 from rlbench.observation_config import ObservationConfig
-from rlbench.tasks import ReachTarget, PickAndLift, PickUpCup, PushButton, PutRubbishInBin, SlideBlockToTarget
+from rlbench.tasks import ReachTarget, PickAndLift, PushButton, PutRubbishInBin, StackBlocks
 from rlbench.backend.exceptions import InvalidActionError
 
 # ==============================================================================
@@ -39,7 +39,7 @@ mcp = FastMCP("rlbench-orchestration-server")
 _ENV = None
 _TASK = None
 _CURRENT_OBS = None
-_TASK_CLASS = ReachTarget  # Default task
+_TASK_CLASS = None  # No default - wait for reset_task() call
 _TASK_DESCRIPTION = ""  # Store task description from reset
 
 # Output directory for sensor data
@@ -75,14 +75,7 @@ def get_environment():
 
         _ENV.launch()
         print("[RLBench] ✓ CoppeliaSim launched", file=sys.stderr)
-
-        # Load task
-        _TASK = _ENV.get_task(_TASK_CLASS)
-        print(f"[RLBench] ✓ Loaded task: {_TASK_CLASS.__name__}", file=sys.stderr)
-
-        # Reset to get initial observation
-        descriptions, _CURRENT_OBS = _TASK.reset()
-        print(f"[RLBench] ✓ Task: {descriptions[0]}", file=sys.stderr)
+        print("[RLBench] Waiting for reset_task() call to load a task...", file=sys.stderr)
 
     return _ENV, _TASK, _CURRENT_OBS
 
@@ -704,6 +697,36 @@ def get_target_position() -> dict:
                 "note": "Rubbish position is for grasping. Lift target (bin) is where to place the rubbish."
             }
 
+        elif hasattr(actual_task, 'target_blocks'):
+            # StackBlocks task
+            target_blocks_positions = []
+            for i, block in enumerate(actual_task.target_blocks):
+                pos = block.get_position()
+                target_blocks_positions.append(pos.tolist())
+                print(f"[Tool: get_target_position] Target block {i}: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]", file=sys.stderr)
+
+            # Get stacking zone position (stack_blocks_target_plane)
+            stack_zone_pos = None
+            try:
+                from pyrep.objects.shape import Shape
+                stack_plane = Shape('stack_blocks_target_plane')
+                stack_zone_pos = stack_plane.get_position()
+                print(f"[Tool: get_target_position] Stacking zone: [{stack_zone_pos[0]:.3f}, {stack_zone_pos[1]:.3f}, {stack_zone_pos[2]:.3f}]", file=sys.stderr)
+            except:
+                print(f"[Tool: get_target_position] ⚠ Could not find stack_blocks_target_plane", file=sys.stderr)
+
+            blocks_to_stack = actual_task.blocks_to_stack if hasattr(actual_task, 'blocks_to_stack') else 2
+            print(f"[Tool: get_target_position] Blocks to stack: {blocks_to_stack}", file=sys.stderr)
+
+            return {
+                "success": True,
+                "task": "StackBlocks",
+                "target_blocks_positions": target_blocks_positions,
+                "stacking_zone_position": stack_zone_pos.tolist() if stack_zone_pos is not None else None,
+                "blocks_to_stack": blocks_to_stack,
+                "note": f"4 target blocks detected. Stack {blocks_to_stack} of them at stacking zone."
+            }
+
         else:
             return {"success": False, "error": f"Task has no target object. Available attributes: {dir(actual_task)}"}
 
@@ -727,9 +750,9 @@ def reset_task(task_name: str = "ReachTarget") -> dict:
         task_name: Task to load. Options:
             - "ReachTarget": Move gripper to touch target
             - "PickAndLift": Pick up object and lift it
-            - "PickUpCup": Pick up a cup
             - "PushButton": Push a button
             - "PutRubbishInBin": Put rubbish/trash in bin
+            - "StackBlocks": Stack blocks of same color
 
     Returns:
         dict with task description
@@ -742,23 +765,22 @@ def reset_task(task_name: str = "ReachTarget") -> dict:
     task_map = {
         "ReachTarget": ReachTarget,
         "PickAndLift": PickAndLift,
-        "PickUpCup": PickUpCup,
         "PushButton": PushButton,
         "PutRubbishInBin": PutRubbishInBin,
-        "SlideBlockToTarget": SlideBlockToTarget
+        "StackBlocks": StackBlocks
     }
 
     _TASK_CLASS = task_map.get(task_name, ReachTarget)  # Default to ReachTarget if unknown
 
-    # Force re-initialization
-    global _ENV
-    if _ENV is not None:
-        _TASK = _ENV.get_task(_TASK_CLASS)
-
+    # Get or create environment (doesn't load task yet)
     env, task, obs = get_environment()
 
+    # Now load the requested task
+    _TASK = env.get_task(_TASK_CLASS)
+    print(f"[Tool: reset_task] Loaded task: {_TASK_CLASS.__name__}", file=sys.stderr)
+
     try:
-        descriptions, _CURRENT_OBS = task.reset()
+        descriptions, _CURRENT_OBS = _TASK.reset()
 
         # Store task description globally for get_camera_observation to use
         global _TASK_DESCRIPTION
@@ -780,6 +802,123 @@ def reset_task(task_name: str = "ReachTarget") -> dict:
 
 
 # ==============================================================================
+# Tool 8: Load Task (NEW - Clearer API)
+# ==============================================================================
+
+@mcp.tool()
+def load_task(task_name: str) -> dict:
+    """
+    Load a specific task and get initial observation
+
+    Use this at the start to load the task based on user's request.
+
+    Args:
+        task_name: Task to load. Options:
+            - "ReachTarget": Move gripper to touch target
+            - "PickAndLift": Pick up object and lift it
+            - "PushButton": Push a button
+            - "PutRubbishInBin": Put rubbish/trash in bin
+            - "StackBlocks": Stack blocks of same color
+
+    Returns:
+        dict with task description and success status
+    """
+    global _TASK, _CURRENT_OBS, _TASK_CLASS
+
+    print(f"[Tool: load_task] Loading {task_name}...", file=sys.stderr)
+
+    # Task name mapping
+    task_map = {
+        "ReachTarget": ReachTarget,
+        "PickAndLift": PickAndLift,
+        "PushButton": PushButton,
+        "PutRubbishInBin": PutRubbishInBin,
+        "StackBlocks": StackBlocks
+    }
+
+    if task_name not in task_map:
+        return {
+            "success": False,
+            "error": f"Unknown task '{task_name}'. Available: {list(task_map.keys())}"
+        }
+
+    _TASK_CLASS = task_map[task_name]
+
+    # Get or create environment
+    env, _, _ = get_environment()
+
+    # Load the requested task
+    _TASK = env.get_task(_TASK_CLASS)
+    print(f"[Tool: load_task] ✓ Loaded: {_TASK_CLASS.__name__}", file=sys.stderr)
+
+    try:
+        descriptions, _CURRENT_OBS = _TASK.reset()
+
+        # Store task description globally
+        global _TASK_DESCRIPTION
+        _TASK_DESCRIPTION = descriptions[0]
+
+        print(f"[Tool: load_task] ✓ Ready: {descriptions[0]}", file=sys.stderr)
+
+        return {
+            "success": True,
+            "task_name": task_name,
+            "description": descriptions[0]
+        }
+
+    except Exception as e:
+        print(f"[Tool: load_task] ✗ Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {"success": False, "error": str(e)}
+
+
+# ==============================================================================
+# Tool 9: Reset Current Task (NEW - For Retries)
+# ==============================================================================
+
+@mcp.tool()
+def reset_current_task() -> dict:
+    """
+    Reset the currently loaded task to retry execution
+
+    Use this when execution fails and you want to start over with the same task.
+    The task must already be loaded via load_task() first.
+
+    Returns:
+        dict with task description and success status
+    """
+    global _TASK, _CURRENT_OBS, _TASK_DESCRIPTION
+
+    if _TASK is None:
+        return {
+            "success": False,
+            "error": "No task loaded. Call load_task(task_name) first."
+        }
+
+    task_name = _TASK.get_name()
+    print(f"[Tool: reset_current_task] Resetting {task_name}...", file=sys.stderr)
+
+    try:
+        descriptions, _CURRENT_OBS = _TASK.reset()
+        _TASK_DESCRIPTION = descriptions[0]
+
+        print(f"[Tool: reset_current_task] ✓ Reset: {descriptions[0]}", file=sys.stderr)
+
+        return {
+            "success": True,
+            "task_name": task_name,
+            "description": descriptions[0]
+        }
+
+    except Exception as e:
+        print(f"[Tool: reset_current_task] ✗ Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return {"success": False, "error": str(e)}
+
+
+# ==============================================================================
 # Server Entry Point
 # ==============================================================================
 
@@ -793,7 +932,9 @@ if __name__ == "__main__":
     print("  3. control_gripper - Open/close gripper", file=sys.stderr)
     print("  4. lift_gripper - Lift by height", file=sys.stderr)
     print("  5. get_current_state - Get robot state", file=sys.stderr)
-    print("  6. reset_task - Reset environment", file=sys.stderr)
+    print("  6. load_task - Load specific task", file=sys.stderr)
+    print("  7. reset_current_task - Reset for retry", file=sys.stderr)
+    print("  8. reset_task - (deprecated, use load_task)", file=sys.stderr)
     print("=" * 70, file=sys.stderr)
     print("", file=sys.stderr)
 

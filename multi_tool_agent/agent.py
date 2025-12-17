@@ -9,6 +9,7 @@ Supported Tasks:
     - PickAndLift: Pick object and lift to target height
     - PushButton: Push a button
     - PutRubbishInBin: Pick trash and place in bin
+    - StackBlocks: Stack 2 blocks of same color vertically
 
 Usage:
     # In ADK web interface - conversational human approval
@@ -70,7 +71,7 @@ rlbench_toolset = MCPToolset(
         timeout=120,
     ),
     tool_filter=[
-        "reset_task", "get_camera_observation", "get_current_state",
+        "load_task", "reset_current_task", "get_camera_observation", "get_current_state",
         "get_target_position", "move_to_position", "control_gripper", "lift_gripper"
     ]
 )
@@ -98,6 +99,7 @@ TASK_DEFINITIONS = """
 | PickAndLift | pick and lift, lift block/cube | Colored blocks + target sphere | Open→Close→Keep closed |
 | PushButton | push/press button | Button panel | CLOSE first, push with fist |
 | PutRubbishInBin | put rubbish/trash in bin | Trash object + bin | Open→Close→Open (release) |
+| StackBlocks | stack blocks, build tower | 4 target blocks (same color) + 4 distractors | Open→Close→Open (repeated 2 times) |
 """
 
 MOTION_SEQUENCES = """
@@ -152,6 +154,44 @@ Often task completes at contact (step 3). Check result before attempting push.
 → COMPLETE
 ```
 **CRITICAL:** Gripper must stay CLOSED from step 4 through step 6. Only open at step 7 to release trash into bin.
+
+### StackBlocks (Gripper: Open→Close→Open, REPEATED 2 times)
+**Drop blocks from above onto stacking zone - simple and robust**
+```
+# STEP 0: Detect all cubes
+0. detect_object_3d("red cube")
+   # Green cube (LAB verified) = stacking zone [stack_x, stack_y, ignored_z]
+   # Red cubes (high confidence) = target blocks
+   # Select 2 red blocks with highest confidence
+
+# CYCLE 1: Drop first block onto stacking zone
+1. control_gripper("open")
+2. move_to_position(block_1_x, block_1_y, block_1_z + 0.15)   # above block 1
+3. move_to_position(block_1_x, block_1_y, block_1_z + 0.015)  # grasp height
+4. control_gripper("close")                                    # GRASP block 1
+5. move_to_position(block_1_x, block_1_y, block_1_z + 0.15)   # lift block
+6. move_to_position(stack_x, stack_y, 0.80)                   # 5cm above stacking zone
+7. control_gripper("open")                                     # DROP block 1 (gentle drop)
+8. move_to_position(stack_x, stack_y, 0.90)                   # retract up
+
+# CYCLE 2: Drop second block on top of first
+9. move_to_position(block_2_x, block_2_y, block_2_z + 0.15)   # above block 2
+10. move_to_position(block_2_x, block_2_y, block_2_z + 0.015) # grasp height
+11. control_gripper("close")                                   # GRASP block 2
+12. move_to_position(block_2_x, block_2_y, block_2_z + 0.15)  # lift block
+13. move_to_position(stack_x, stack_y, 0.85)                  # 5cm above first block
+14. control_gripper("open")                                    # DROP block 2 (gentle drop)
+15. move_to_position(stack_x, stack_y, 0.90)                  # retract
+→ COMPLETE (2 blocks stacked)
+```
+⚠️ **CRITICAL:**
+- Use green cube for stack_x and stack_y ONLY (ignore green_z completely)
+- Block 1 drop height: z = 0.80 (5cm above table - gentle drop, won't bounce)
+- Block 2 drop height: z = 0.85 (5cm above first block)
+- After dropping, retract to z = 0.90 to clear the area
+- DO NOT try to place precisely - drop from low height and let gravity stack them
+- Must track state: blocks_stacked = 0, 1 after each drop
+- Select 2 red cubes with highest confidence
 """
 
 DETECTION_STRATEGY = """
@@ -167,6 +207,15 @@ DETECTION_STRATEGY = """
 | PickAndLift | `"red cube . sphere"` (multi-object) | Both from `objects[]` array (detected positions) |
 | PushButton | `detection_prompt` | `position_3d` |
 | PutRubbishInBin | `"trash . bin"` (multi-object) | Both from `objects[]` array (detected positions) |
+| StackBlocks | `"red cube"` (detects all cubes including green stacking zone) | All from `objects[]` array - green cube is stacking zone, select 2 highest confidence red cubes |
+
+**StackBlocks Special Detection:**
+- Detect ALL cubes in scene: `detect_object_3d("red cube", ...)`
+- LAB color verification identifies green cube as stacking zone (different color)
+- Use green cube for X,Y position ONLY: [stack_x, stack_y] - ignore green_z
+- Drop from low heights: Block 1 at z=0.80 (5cm above table), Block 2 at z=0.85
+- Filter red cubes: select 2 blocks with highest confidence (ignore low confidence/achromatic)
+- Track which blocks have been dropped (avoid re-picking)
 
 **Ground Truth for Reference Only:**
 - **All tasks:** Ground truth available for comparison/validation but NOT used in motion execution.
@@ -186,14 +235,14 @@ sensing_agent = Agent(
     instruction="""You are the sensing agent. Capture sensor data for perception.
 
 ## TOOLS
-- `reset_task(task_name)` - Options: ReachTarget, PickAndLift, PushButton, PutRubbishInBin
+- `load_task(task_name)` - Load task: ReachTarget, PickAndLift, PushButton, PutRubbishInBin, StackBlocks
 - `get_camera_observation()` - Returns file paths + `detection_prompt`
 - `get_target_position()` - Ground truth positions
 - `get_current_state()` - Gripper state
 
 ## WORKFLOW
 1. Read task type from approved plan
-2. `reset_task(task_name)`
+2. `load_task(task_name)` → Loads and initializes the task
 3. `get_camera_observation()` → capture paths + detection_prompt
 4. `get_target_position()` → ground truth (for reference/validation only)
 5. Report all paths
@@ -313,7 +362,8 @@ root_agent = Agent(
 ## TOOLS AVAILABLE
 
 **Sensing:**
-- `reset_task(task_name)` - Reset environment
+- `load_task(task_name)` - Load task (ReachTarget, PickAndLift, PushButton, PutRubbishInBin, StackBlocks)
+- `reset_current_task()` - Reset for retry (if execution failed)
 - `get_camera_observation()` - Returns paths + `detection_prompt` + `task_objects`
 - `get_target_position()` - Ground truth positions
 - `get_current_state()` - Gripper position/state
@@ -355,16 +405,18 @@ PARAMETER DEFINITIONS BY TASK:
 - **PickAndLift**: approach_height (0.10-0.20m), grasp_offset (0.01-0.03m)
 - **PushButton**: approach_height (0.05-0.15m), push_depth (0.001-0.005m)
 - **ReachTarget**: approach_height (0.05-0.15m)
+- **StackBlocks**: approach_height (0.10-0.20m), grasp_offset (0.01-0.03m), stack_offset (0.05-0.07m), stack_zone_xy ([0.0, 0.3] default)
 
 RISK LEVEL CLASSIFICATION:
 - LOW: ReachTarget, PushButton (simple, no grasping or minimal risk)
 - MEDIUM: PickAndLift, PutRubbishInBin (grasping, controlled environment)
+- HIGH: StackBlocks (multi-step, state tracking, precision stacking, 8 objects)
 ```
 
 ### Phase 2: Execution (after approval)
 ```
 1. SENSING
-   - reset_task(task_name)
+   - load_task(task_name)
    - get_camera_observation() → save detection_prompt
    - get_target_position() → ground truth (for reference/validation only)
 
@@ -412,6 +464,27 @@ Example:
 ```
 **CRITICAL:** Gripper MUST stay closed after grasping (step 4) until reaching bin release position (step 7). Do NOT open gripper during lift or transport.
 
+### StackBlocks - DROP FROM ABOVE APPROACH!
+```
+- Detect ALL cubes: detect_object_3d("red cube", ...)
+- LAB verification identifies green cube as stacking zone, red cubes as targets
+- Extract X,Y from green cube ONLY: stack_x = green_x, stack_y = green_y
+- IGNORE green_z completely - use fixed drop heights instead
+- Filter red cubes: select 2 with highest confidence (ignore achromatic/low confidence)
+- Execute 2 pick-drop cycles:
+  * Cycle 1: Drop block from z=0.80 (5cm above table - gentle drop)
+  * Cycle 2: Drop block from z=0.85 (5cm above first block)
+- Must track blocks_stacked state (0 → 1 → 2)
+- Gripper opens at drop height - gravity does the rest
+- Ground truth available for reference/validation only
+```
+⚠️ **CRITICAL:**
+- This is a LOOP task - repeat pick-drop sequence 2 times
+- Use green cube for X,Y coordinates ONLY - NEVER use green_z
+- Fixed drop heights: 0.80 for first block, 0.85 for second block (low and gentle)
+- DO NOT try to place precisely - drop from low height and let gravity stack
+- Track which blocks have been dropped (don't re-pick same block)
+
 ### ReachTarget vs PushButton
 ```
 ReachTarget: Gripper stays OPEN (just touching)
@@ -449,7 +522,7 @@ Plan:
   Task: ReachTarget | Target: red sphere | Gripper: OPEN
 
 Execution:
-  1. reset_task("ReachTarget")
+  1. load_task("ReachTarget")
   2. get_camera_observation() → detection_prompt="red sphere"
   3. detect_object_3d("red sphere", ...) → [0.2, -0.3, 0.8]
   4. move_to_position(0.2, -0.3, 0.9)  # above
@@ -465,7 +538,7 @@ Plan:
   Task: PickAndLift | Target: cube→sphere | Gripper: Open→Close→Closed
 
 Execution:
-  1. reset_task("PickAndLift")
+  1. load_task("PickAndLift")
   2. get_camera_observation() → detection_prompt (for reference)
   3. get_target_position() → ground truth (for reference/validation only)
   4. detect_object_3d("red cube . sphere", ...) → objects[0]=cube, objects[1]=sphere
@@ -486,7 +559,7 @@ Plan:
   Task: PushButton | Target: button | Gripper: CLOSE FIRST
 
 Execution:
-  1. reset_task("PushButton")
+  1. load_task("PushButton")
   2. get_camera_observation() → detection_prompt="button"
   3. detect_object_3d("button", ...) → [0.3, -0.2, 0.85]
   4. control_gripper("close")               # FIRST!
@@ -558,7 +631,7 @@ User: "approved"
 PHASE 2: EXECUTION
 ---
 ### Sensing
-  1. reset_task("PutRubbishInBin") → success
+  1. load_task("PutRubbishInBin") → success
   2. get_camera_observation() → paths captured
   3. get_target_position() → ground truth for reference
 
@@ -718,6 +791,7 @@ if __name__ == "__main__":
     print("  - PickAndLift: 'Pick up the red block'")
     print("  - PushButton: 'Push the button'")
     print("  - PutRubbishInBin: 'Put rubbish in bin'")
+    print("  - StackBlocks: 'Stack 2 red blocks'")
     print("\nAgents:")
     print(f"  1. {root_agent.name} (planning + orchestration with human-in-the-loop)")
     print(f"  2. {sensing_agent.name}")
