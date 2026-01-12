@@ -2,9 +2,7 @@
 
 ## Overview
 
-A multi-agent robotic manipulation system using Google's Agent Development Kit (ADK) and RLBench simulation environment. The framework implements a human-in-the-loop approach for robot manipulation tasks with open-vocabulary object detection.
-
-**Primary Goal:** Evaluate multi-agent LLM collaboration for robotic manipulation tasks using a proven benchmark platform.
+A multi-agent system using Google's Agent Development Kit (ADK) and RLBench simulation environment. The framework implements a a human-aligned multi-agent framework for language-guided robotic manipulation
 
 ---
 
@@ -58,7 +56,7 @@ The framework implements a **hierarchical multi-agent system** with human oversi
   - Perception: Detect objects using open-vocabulary detection
   - Motion: Execute motion sequences with gripper control
 
-**Model:** DeepSeek (via LiteLLM)
+**Model:** DeepSeek (via LiteLLM) AND OpenAI o5mini
 
 ### 2. Perception System
 
@@ -362,16 +360,9 @@ rlbench-multi-agent/
 
 ## References
 
-**Papers:**
-- MALMM: Multi-Agent Large Language Models for Zero-Shot Robotics Manipulation (arXiv:2411.17636)
 
 **Tools:**
 - RLBench: https://github.com/stepjam/RLBench
 - GroundingDINO: https://github.com/IDEA-Research/GroundingDINO
 - Google ADK: https://github.com/google/adk
 - IKPy: https://github.com/Phylliade/ikpy
-
----
-
-**Last Updated:** 2026-01-12
-**Status:** Production - 5 tasks completed
