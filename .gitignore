@@ -69,3 +69,14 @@ multi_tool_agent/rlbench_test_output/
 ~/Downloads/
 ~/Pictures/
 
+# Old docs
+docs/DEMO_BASED_EXECUTION_README.md
+docs/IK_SOLVER_FINDINGS.md
+docs/MOTION_CONTROL_FIX.md
+docs/ORCHESTRATION_PLAN.md
+docs/PERCEPTION_ACCURACY_IMPROVEMENTS.md
+docs/PERCEPTION_FIX_PHASE_1.5.md
+docs/PERCEPTION_IMPLEMENTATION_PLAN.md
+docs/PICKANDLIFT_INTEGRATION_GUIDE.md
+docs/RLBench_Standalone_Test_README.md
+

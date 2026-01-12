@@ -217,10 +217,10 @@ Test with multiple object positions to ensure fix is general, not just for one c
 ## Academic Requirements
 
 For your framework to be academically valid:
-1. ✓ **Task-agnostic:** Works for multiple tasks (ReachTarget, PickAndLift)
-2. ✓ **Perception-based:** Uses camera observations, not ground truth
-3. ✓ **Multi-agent:** Orchestrator coordinates sensing/perception/motion agents
-4. ⏳ **Benchmarked:** Evaluated on RLBench standardized tasks
-5. ⏳ **Success rate:** Must actually complete tasks
+1.  **Task-agnostic:** Works for multiple tasks (ReachTarget, PickAndLift)
+2.  **Perception-based:** Uses camera observations, not ground truth
+3.  **Multi-agent:** Orchestrator coordinates sensing/perception/motion agents
+4.  **Benchmarked:** Evaluated on RLBench standardized tasks
+5.  **Success rate:** Must actually complete tasks
 
 Using demos would violate requirements 2 and 3. You're absolutely right to insist on fixing perception.
