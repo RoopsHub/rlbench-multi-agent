@@ -39,34 +39,41 @@ rlbench-multi-agent/
 ### Prerequisites
 - Python 3.8+
 - CoppeliaSim v4.1.0 (for RLBench)
+- RLBench: https://github.com/stepjam/RLBench
 - CUDA-capable GPU (recommended for GroundingDINO)
 
 ### Installation
 
-1. Clone repository:
+1. Install RLBench:
+```bash
+# Follow installation instructions from:
+# https://github.com/stepjam/RLBench
+```
+
+2. Clone this repository:
 ```bash
 git clone https://github.com/RoopsHub/rlbench-multi-agent.git
 cd rlbench-multi-agent
 ```
 
-2. Create virtual environment:
+3. Create virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Linux/Mac
 ```
 
-3. Install dependencies:
+4. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Download GroundingDINO weights:
+5. Download GroundingDINO weights:
 ```bash
 mkdir -p multi_tool_agent/ros_mcp_server/model
 # Place groundingdino_swint_ogc.pth in model/ directory
 ```
 
-5. Configure environment variables:
+6. Configure environment variables:
 ```bash
 export COPPELIASIM_ROOT=/path/to/CoppeliaSim
 export LD_LIBRARY_PATH=$COPPELIASIM_ROOT:$LD_LIBRARY_PATH
@@ -137,17 +144,13 @@ Detailed guides in `docs/` folder:
 - Confirm GroundingDINO weights in `multi_tool_agent/ros_mcp_server/model/`
 - Check CUDA availability for GPU inference
 
-## Contributing
-
-Contributions welcome! Review documentation in `docs/` before submitting pull requests.
-
 ## License
 
 [Add your license here]
 
 ## Acknowledgments
 
-- Google Agent Development Kit (ADK)
-- RLBench robotic manipulation benchmark
-- GroundingDINO open-vocabulary object detection
+- [Google Agent Development Kit (ADK)](https://github.com/google/adk)
+- [RLBench robotic manipulation benchmark](https://github.com/stepjam/RLBench)
+- [GroundingDINO open-vocabulary object detection](https://github.com/IDEA-Research/GroundingDINO)
 - DeepSeek and OpenAI language models

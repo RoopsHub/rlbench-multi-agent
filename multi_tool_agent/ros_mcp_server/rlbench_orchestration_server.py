@@ -160,8 +160,6 @@ def parse_task_objects(task_description: str) -> list:
                     relevant_color = color
                     break
 
-            # Special case: For "target" in PickAndLift, use any color found in description
-            # "pick up the red block and lift it up to the target" - target should be red
             if keyword == 'target' and not relevant_color and colors:
                 relevant_color = colors[0]  # Use first color found in description
 
@@ -336,7 +334,7 @@ def move_to_position(x: float, y: float, z: float, use_planning: bool = True) ->
             print(f"[Tool: move_to_position] Using path planning (robust for large movements)", file=sys.stderr)
 
             # Create planning action mode temporarily
-            # Note: collision_checking=True may help reach difficult positions
+            # Note: collision_checking=True helps reach difficult positions
             planning_mode = MoveArmThenGripper(
                 arm_action_mode=EndEffectorPoseViaPlanning(collision_checking=True),
                 gripper_action_mode=Discrete()
@@ -819,7 +817,7 @@ def reset_task(task_name: str = "ReachTarget") -> dict:
 
 
 # ==============================================================================
-# Tool 8: Load Task (NEW - Clearer API)
+# Tool 8: Load Task 
 # ==============================================================================
 
 @mcp.tool()
@@ -891,7 +889,7 @@ def load_task(task_name: str) -> dict:
 
 
 # ==============================================================================
-# Tool 9: Reset Current Task (NEW - For Retries)
+# Tool 9: Reset Current Task
 # ==============================================================================
 
 @mcp.tool()
