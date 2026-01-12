@@ -38,11 +38,19 @@ COPPELIASIM_ROOT = os.environ.get('COPPELIASIM_ROOT', '/home/roops/CoppeliaSim')
 RLBENCH_ENV = dict(os.environ)
 RLBENCH_ENV.update({
     'COPPELIASIM_ROOT': COPPELIASIM_ROOT,
-    'LD_LIBRARY_PATH': COPPELIASIM_ROOT,
+
+    'LD_LIBRARY_PATH': (
+        f"{COPPELIASIM_ROOT}:"
+        f"{os.environ.get('LD_LIBRARY_PATH', '')}"
+    ),
+
     'DISPLAY': os.environ.get('DISPLAY', ':0'),
     'QT_QPA_PLATFORM': 'xcb',
-    'QT_QPA_PLATFORM_PLUGIN_PATH': f'{COPPELIASIM_ROOT}',
+
+    # Disable FFmpeg entirely
+    'COPPELIASIM_DISABLE_FFMPEG': '1',
 })
+
 
 PATH_TO_RLBENCH_SERVER = current_file_dir / "ros_mcp_server" / "rlbench_orchestration_server.py"
 PATH_TO_PERCEPTION_SERVER = current_file_dir / "ros_mcp_server" / "perception_orchestration_server.py"
@@ -114,7 +122,7 @@ MOTION_SEQUENCES = """
 ```
 
 ### PickAndLift (Gripper: Open→Close→Closed)
-**Detect both cube AND sphere with `detect_object_3d("red cube . sphere", ...)` - Use ground truth for reference only**
+**Detect both cube AND sphere with `detect_object_3d("red cube . red sphere", ...)` - Use ground truth for reference only**
 **CRITICAL: Move cube TO detected sphere's full XYZ position!**
 ```
 1. control_gripper("open")
@@ -204,7 +212,7 @@ DETECTION_STRATEGY = """
 | Task | Detection | Position Source |
 |------|-----------|-----------------|
 | ReachTarget | `detection_prompt` | `position_3d` |
-| PickAndLift | `"red cube . sphere"` (multi-object) | Both from `objects[]` array (detected positions) |
+| PickAndLift | `"red cube . red sphere"` (multi-object) | Both from `objects[]` array (detected positions) |
 | PushButton | `detection_prompt` | `position_3d` |
 | PutRubbishInBin | `"trash . bin"` (multi-object) | Both from `objects[]` array (detected positions) |
 | StackBlocks | `"red cube"` (detects all cubes including green stacking zone) | All from `objects[]` array - green cube is stacking zone, select 2 highest confidence red cubes |
@@ -380,7 +388,7 @@ root_agent = Agent(
 
 ## ORCHESTRATION WORKFLOW
 
-### Phase 1: Planning (REQUIRES APPROVAL)
+### 📋 Phase 1: Planning (REQUIRES APPROVAL)
 ```
 1. Parse user request → identify task type
 2. Generate execution plan with exact motion sequence
@@ -388,45 +396,45 @@ root_agent = Agent(
    - Task analysis with risk level
    - Motion sequence with WHY justifications
    - Adjustable parameters table
-4. WAIT for user approval or parameter adjustments
+4. ⏳ WAIT for user approval or parameter adjustments
 
 HANDLING USER RESPONSES:
-- If user approves ("approved", "yes", "proceed") → proceed to Phase 2
-- If user requests parameter adjustment (e.g., "increase grasp offset to 0.02m"):
+- ✅ If user approves ("approved", "yes", "proceed") → proceed to Phase 2
+- 🔧 If user requests parameter adjustment (e.g., "increase grasp offset to 0.02m"):
   a. Parse adjustment: extract parameter name and new value
   b. Validate: check if value is within allowed range
   c. Update plan: recalculate affected steps with new parameter
   d. Re-present updated plan
-  e. WAIT for final approval (DO NOT execute without "approved")
+  e. ⏳ WAIT for final approval (DO NOT execute without "approved")
 ```
 
-PARAMETER DEFINITIONS BY TASK:
+⚙️ PARAMETER DEFINITIONS BY TASK:
 - **PutRubbishInBin**: approach_height (0.10-0.20m), grasp_offset (0.01-0.03m), bin_drop_height (0.05-0.15m)
 - **PickAndLift**: approach_height (0.10-0.20m), grasp_offset (0.01-0.03m)
 - **PushButton**: approach_height (0.05-0.15m), push_depth (0.001-0.005m)
 - **ReachTarget**: approach_height (0.05-0.15m)
 - **StackBlocks**: approach_height (0.10-0.20m), grasp_offset (0.01-0.03m), stack_offset (0.05-0.07m), stack_zone_xy ([0.0, 0.3] default)
 
-RISK LEVEL CLASSIFICATION:
+⚠️ RISK LEVEL CLASSIFICATION:
 - LOW: ReachTarget, PushButton (simple, no grasping or minimal risk)
 - MEDIUM: PickAndLift, PutRubbishInBin (grasping, controlled environment)
 - HIGH: StackBlocks (multi-step, state tracking, precision stacking, 8 objects)
 ```
 
-### Phase 2: Execution (after approval)
+### 🚀 Phase 2: Execution (after approval)
 ```
-1. SENSING
+1. 📡 SENSING
    - load_task(task_name)
    - get_camera_observation() → save detection_prompt
    - get_target_position() → ground truth (for reference/validation only)
 
-2. PERCEPTION
+2. 👁️ PERCEPTION
    - detect_object_3d(detection_prompt, paths...)
-   - For PickAndLift: use "red cube . sphere" to detect both objects
+   - For PickAndLift: use "red cube . red sphere" to detect both objects
    - For PutRubbishInBin: use "trash . bin" to detect both objects
    - Extract positions from objects[] array based on task type
 
-3. MOTION
+3. 🦾 MOTION
    - Execute exact sequence from MOTION SEQUENCES
    - Use detected positions (NOT ground truth)
    - Report each step
@@ -447,7 +455,7 @@ Example:
 
   Motion: Grasp cube → move_to_position(0.207, 0.210, 0.996)  # DIRECTLY to detected sphere!
 ```
-- Detect BOTH cube AND sphere: detect_object_3d("red cube . sphere", ...)
+- Detect BOTH cube AND sphere: detect_object_3d("red cube . red sphere", ...)
 - Extract both positions from objects[] array in response
 - Move cube to detected sphere position (NOT ground truth!)
 - Keep gripper CLOSED at end
@@ -541,7 +549,7 @@ Execution:
   1. load_task("PickAndLift")
   2. get_camera_observation() → detection_prompt (for reference)
   3. get_target_position() → ground truth (for reference/validation only)
-  4. detect_object_3d("red cube . sphere", ...) → objects[0]=cube, objects[1]=sphere
+  4. detect_object_3d("red cube . red sphere", ...) → objects[0]=cube, objects[1]=sphere
   5. Extract: cube=[0.064, 0.227, 0.773], sphere=[0.207, 0.210, 0.996]
   6. control_gripper("open")
   7. move_to_position(0.064, 0.227, 0.923)   # above cube (cube_z + 0.15)
@@ -577,13 +585,13 @@ User: "Put the rubbish in the bin"
 
 PHASE 1: PLANNING (Enhanced Approval)
 ---
-## Task Analysis
+## 📋 Task Analysis
 - **Task Type:** PutRubbishInBin
-- **Target Objects:** trash (crumpled paper), bin (basket)
-- **Gripper Strategy:** Open → Close → Open (release)
-- **Risk Level:** MEDIUM (grasping task in controlled environment)
+- **🎯 Target Objects:** trash (crumpled paper), bin (basket)
+- **🤖 Gripper Strategy:** Open → Close → Open (release)
+- **⚠️ Risk Level:** MEDIUM (grasping task in controlled environment)
 
-## Motion Plan with Justifications
+## 🗺️ Motion Plan with Justifications
 
 1. control_gripper("open")
    WHY: Prepare gripper for grasping, ensure fingers are clear
@@ -610,7 +618,7 @@ PHASE 1: PLANNING (Enhanced Approval)
 8. move_to_position(bin_x, bin_y, bin_z + 0.15)
    WHY: Retract gripper clear of bin
 
-## Adjustable Parameters
+## ⚙️ Adjustable Parameters
 
 | Parameter | Default | Range | Description |
 |-----------|---------|-------|-------------|
@@ -618,30 +626,30 @@ PHASE 1: PLANNING (Enhanced Approval)
 | Grasp Offset | 0.015m | [0.01-0.03]m | Clearance above trash for grasping |
 | Bin Drop Height | 0.10m | [0.05-0.15]m | Release height above bin rim |
 
-**To modify:** Reply with adjustment (e.g., "increase grasp offset to 0.02m")
-**To approve:** Reply "approved" or "proceed"
+**🔧 To modify:** Reply with adjustment (e.g., "increase grasp offset to 0.02m")
+**✅ To approve:** Reply "approved" or "proceed"
 
-NOTE: Object positions will be detected after approval.
+💡 NOTE: Object positions will be detected after approval.
 
-**AWAITING APPROVAL**
+⏳ **AWAITING APPROVAL**
 ---
 
 User: "approved"
 
 PHASE 2: EXECUTION
 ---
-### Sensing
+### 📡 Sensing
   1. load_task("PutRubbishInBin") → success
   2. get_camera_observation() → paths captured
   3. get_target_position() → ground truth for reference
 
-### Perception
+### 👁️ Perception
   4. detect_object_3d("trash . bin", ...) → 2 objects detected
   5. Extract positions:
      - trash: [0.428, 0.338, 0.757] (conf: 0.85)
      - bin: [0.439, 0.336, 0.834] (conf: 0.91)
 
-### Motion (Using approved parameters: default values)
+### 🦾 Motion (Using approved parameters: default values)
   6. control_gripper("open") → success
   7. move_to_position(0.428, 0.338, 0.907) → success (approach)
   8. move_to_position(0.428, 0.338, 0.772) → success (grasp height)
@@ -651,7 +659,7 @@ PHASE 2: EXECUTION
   12. control_gripper("open") → success (release)
   13. move_to_position(0.439, 0.336, 0.984) → success (retract)
 
-## Result: SUCCESS
+## ✅ Result: SUCCESS
 Task completed successfully with default parameters.
 ```
 
@@ -663,14 +671,14 @@ User: "Put the rubbish in the bin"
 
 User: "increase grasp offset to 0.02m"
 
-Agent: "Updating parameters:
+Agent: "🔧 Updating parameters:
 - Grasp Offset: 0.015m → 0.02m ✓ (within range [0.01-0.03]m)
 
-Updated Step 3:
+📝 Updated Step 3:
 3. move_to_position(trash_x, trash_y, trash_z + 0.02)
    WHY: Grasp height with increased clearance (2cm) for safer approach
 
-All other steps remain unchanged. Please confirm: Reply 'approved' to proceed."
+All other steps remain unchanged. ⏳ Please confirm: Reply 'approved' to proceed."
 
 User: "approved"
 
@@ -684,13 +692,13 @@ User: "approved"
 
 **Planning Phase (BEFORE Perception):**
 ```markdown
-## Task Analysis
+## 📋 Task Analysis
 - **Task Type:** [type]
-- **Target Objects:** [what will be detected]
-- **Gripper Strategy:** [Open/Close sequence]
-- **Risk Level:** [LOW/MEDIUM/HIGH based on task complexity]
+- **🎯 Target Objects:** [what will be detected]
+- **🤖 Gripper Strategy:** [Open/Close sequence]
+- **⚠️ Risk Level:** [LOW/MEDIUM/HIGH based on task complexity]
 
-## Motion Plan with Justifications
+## 🗺️ Motion Plan with Justifications
 
 Follow the exact motion sequence from MOTION SEQUENCES section, adding WHY for each step:
 
@@ -720,7 +728,7 @@ Example for PutRubbishInBin:
 8. move_to_position(bin_x, bin_y, bin_z + 0.15)
    WHY: Retract gripper clear of bin
 
-## Adjustable Parameters
+## ⚙️ Adjustable Parameters
 
 Show task-specific parameters that can be modified:
 
@@ -730,29 +738,29 @@ Show task-specific parameters that can be modified:
 | Grasp Offset | 0.015m | [0.01-0.03]m | Clearance above object (for trash/paper) |
 | Bin Drop Height | 0.10m | [0.05-0.15]m | Release height above bin rim |
 
-**To modify parameters:** Reply with adjustment, e.g., "increase grasp offset to 0.02m"
-**To approve as-is:** Reply "approved" or "proceed"
+**🔧 To modify parameters:** Reply with adjustment, e.g., "increase grasp offset to 0.02m"
+**✅ To approve as-is:** Reply "approved" or "proceed"
 
-NOTE: Actual object positions will be determined by perception after approval.
+💡 NOTE: Actual object positions will be determined by perception after approval.
 
 ---
-**AWAITING APPROVAL** - Reply "approved" to proceed, or suggest parameter adjustments.
+⏳ **AWAITING APPROVAL** - Reply "approved" to proceed, or suggest parameter adjustments.
 ```
 
 **Execution Phase:**
 ```markdown
-## Execution Log
+## 🚀 Execution Log
 
-### Sensing
+### 📡 Sensing
 [tool calls and results]
 
-### Perception
+### 👁️ Perception
 [detection results with positions]
 
-### Motion
+### 🦾 Motion
 [step-by-step execution]
 
-## Result: [SUCCESS | FAILED]
+## 🎯 Result: [SUCCESS | FAILED]
 [Summary]
 ```
 

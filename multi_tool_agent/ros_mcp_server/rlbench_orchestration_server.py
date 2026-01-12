@@ -53,13 +53,25 @@ def get_environment():
     if _ENV is None:
         print("[RLBench] Initializing environment...", file=sys.stderr)
 
-        # Configure observations - enable cameras
         obs_config = ObservationConfig()
-        obs_config.set_all(True)
-        obs_config.front_camera.image_size = [512, 512]
+
+        # REQUIRED for control
+        obs_config.set_all_low_dim(True)
+
+        # Disable vision by default
+        obs_config.set_all_high_dim(False)
+
+        # Enable only needed cameras
         obs_config.front_camera.rgb = True
         obs_config.front_camera.depth = True
-        obs_config.front_camera.point_cloud = True  # Enable point cloud computation by RLBench
+        obs_config.front_camera.point_cloud = True 
+        obs_config.front_camera.image_size = [512, 512]
+
+        obs_config.left_shoulder_camera.rgb = True
+        obs_config.right_shoulder_camera.rgb = True
+        obs_config.wrist_camera.rgb = True
+        obs_config.overhead_camera.rgb = True
+
 
         # Use EndEffectorPoseViaIK for Cartesian control
         action_mode = MoveArmThenGripper(
@@ -75,7 +87,7 @@ def get_environment():
 
         _ENV.launch()
         print("[RLBench] ✓ CoppeliaSim launched", file=sys.stderr)
-        print("[RLBench] Waiting for reset_task() call to load a task...", file=sys.stderr)
+        print("[RLBench] Waiting for load_task() call to load a task...", file=sys.stderr)
 
     return _ENV, _TASK, _CURRENT_OBS
 
@@ -84,7 +96,7 @@ def parse_task_objects(task_description: str) -> list:
     """
     Parse task description to extract object names WITH COLORS for detection
 
-    Hybrid VoxPoser approach: Extract both color AND shape to handle multiple objects
+    Hybrid approach: Extract both color AND shape to handle multiple objects
     Example: "pick up the red block" → ["red cube"]
     Example: "reach the red target" → ["red sphere"]
 
@@ -147,6 +159,11 @@ def parse_task_objects(task_description: str) -> list:
                 if color_index >= 0 and color_index < obj_index and (obj_index - color_index) < 30:
                     relevant_color = color
                     break
+
+            # Special case: For "target" in PickAndLift, use any color found in description
+            # "pick up the red block and lift it up to the target" - target should be red
+            if keyword == 'target' and not relevant_color and colors:
+                relevant_color = colors[0]  # Use first color found in description
 
             # Expand with synonyms for better detection
             obj_expanded = object_synonyms.get(obj_name, obj_name)
