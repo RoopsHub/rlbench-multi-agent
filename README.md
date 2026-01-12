@@ -1,50 +1,49 @@
 # RLBench Multi-Agent Framework
 
-A multi-agent robotic manipulation system using Google's Agent Development Kit (ADK) and RLBench simulation environment.
+A human-aligned multi-agent framework for language-guided robotic manipulation using Google's Agent Development Kit and RLBench simulation.
 
 ## Overview
 
-This framework implements a human-in-the-loop multi-agent system for robot manipulation tasks:
-- **Planning Agent**: Generates execution plans for approval
-- **Sensing Agent**: Captures camera observations and sensor data
-- **Perception Agent**: Detects objects using GroundingDINO
-- **Motion Agent**: Executes pick-and-place motions
+This framework implements human-in-the-loop multi-agent orchestration for manipulation tasks:
+- **Root Orchestrator**: Generates plans with adjustable parameters, awaits approval
+- **Sensing**: Captures RGB, depth, and point cloud observations
+- **Perception**: Open-vocabulary object detection via GroundingDINO
+- **Motion**: Cartesian position control with gripper sequences
 
 ## Features
 
 - ✅ Multi-agent orchestration with human approval workflow
-- ✅ Open-vocabulary object detection with GroundingDINO
-- ✅ Depth-filtered 3D localization (1.7cm accuracy)
-- ✅ RLBench integration (ReachTarget, PickAndLift tasks)
-- ✅ Model Context Protocol (MCP) for tool abstraction
-- ✅ Path planning with collision avoidance
+- ✅ Open-vocabulary object detection (no training required)
+- ✅ Five completed RLBench tasks (ReachTarget, PickAndLift, PushButton, PutRubbishInBin, StackBlocks)
+- ✅ Model Context Protocol (MCP) for platform abstraction
+- ✅ Text-prompted 3D object localization
+- ✅ Parameter adjustment during planning phase
 
 ## Project Structure
 
 ```
 rlbench-multi-agent/
 ├── multi_tool_agent/
-│   ├── agent.py                    # Multi-agent orchestrator
+│   ├── agent.py                               # Multi-agent orchestrator
 │   └── ros_mcp_server/
-│       ├── rlbench_orchestration_server.py    # RLBench control tools
-│       ├── perception_orchestration_server.py # Object detection tools
-│       └── sensor_data/            # Runtime sensor data (gitignored)
-├── docs/                           # Documentation
-├── archive/                        # Old versions and experiments
-├── requirements.txt                # Python dependencies
-└── README.md                       # This file
+│       ├── rlbench_orchestration_server.py    # RLBench MCP tools
+│       ├── perception_orchestration_server.py # GroundingDINO detection
+│       └── sensor_data/                       # Runtime data (gitignored)
+├── docs/                                      # Framework documentation
+├── requirements.txt                           # Python dependencies
+└── README.md                                  # This file
 ```
 
 ## Setup
 
 ### Prerequisites
 - Python 3.8+
-- CoppeliaSim (for RLBench)
-- CUDA-capable GPU (for GroundingDINO)
+- CoppeliaSim v4.1.0 (for RLBench)
+- CUDA-capable GPU (recommended for GroundingDINO)
 
 ### Installation
 
-1. Clone the repository:
+1. Clone repository:
 ```bash
 git clone https://github.com/RoopsHub/rlbench-multi-agent.git
 cd rlbench-multi-agent
@@ -53,7 +52,7 @@ cd rlbench-multi-agent
 2. Create virtual environment:
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # On Linux/Mac
+source .venv/bin/activate  # Linux/Mac
 ```
 
 3. Install dependencies:
@@ -61,92 +60,86 @@ source .venv/bin/activate  # On Linux/Mac
 pip install -r requirements.txt
 ```
 
-4. Download GroundingDINO model weights:
+4. Download GroundingDINO weights:
 ```bash
-# Create model directory
 mkdir -p multi_tool_agent/ros_mcp_server/model
-
-# Download weights (example - adjust URL as needed)
-# Place groundingdino_swint_ogc.pth and GroundingDINO_SwinT_OGC.py in model/
+# Place groundingdino_swint_ogc.pth in model/ directory
 ```
 
-5. Configure environment:
+5. Configure environment variables:
 ```bash
-cp .env.example .env
-# Edit .env with your API keys (DeepSeek, etc.)
+export COPPELIASIM_ROOT=/path/to/CoppeliaSim
+export LD_LIBRARY_PATH=$COPPELIASIM_ROOT:$LD_LIBRARY_PATH
 ```
 
 ## Usage
 
-### Running the Multi-Agent System
+### Running the System
 
 ```bash
-# Activate virtual environment
 source .venv/bin/activate
-
-# Start ADK web interface
 python -m google.adk.ui.web --agent-module multi_tool_agent.agent --agent-name root_agent --port 8000
 ```
 
-Then open http://localhost:8000 in your browser.
+Navigate to http://localhost:8000 in browser.
 
 ### Example Tasks
 
 **ReachTarget:**
 ```
 User: "Reach the red target"
-Agent: [Generates plan] → Wait for approval → Execute
+Agent: [Plan with parameters] → Approval → Execute
 ```
 
 **PickAndLift:**
 ```
-User: "Pick up the red cube"
-Agent: [Generates plan] → Wait for approval → Execute
+User: "Pick up the red cube and lift it"
+Agent: [Plan with parameters] → Approval → Execute
 ```
 
 ## Key Components
 
 ### Agent Architecture
-- **DeepSeek Reasoner**: Planning and reasoning
-- **DeepSeek Chat**: Fast execution agents
-- **GroundingDINO**: Text-based object detection
-- **RLBench**: Robot manipulation simulation
+- **DeepSeek / OpenAI**: Planning and execution reasoning
+- **GroundingDINO**: Text-prompted open-vocabulary detection
+- **RLBench**: Benchmark manipulation environment (100+ tasks)
+- **MCP**: Standardized tool protocol for platform abstraction
 
 ### Perception Pipeline
-1. Capture RGB + Depth from RLBench camera
-2. Detect object with GroundingDINO (text prompt)
-3. Depth-filtered averaging for accurate 3D position
-4. Transform to robot base frame
+1. Capture RGB + Depth from RLBench cameras
+2. Detect objects with text prompts (e.g., "red cube . red sphere")
+3. Extract 3D positions from depth and point cloud
+4. Transform coordinates to robot base frame
 
 ### Motion Control
-- Path planning with collision avoidance
-- Gripper state preservation during motion
-- Task-specific sequences (reach, grasp, lift)
+- Cartesian position control via inverse kinematics
+- Binary gripper states (open/close)
+- Task-specific motion sequences with approach heights
+- Sequential execution with error propagation
 
 ## Documentation
 
-See `docs/` folder for detailed documentation:
-- `FRAMEWORK_REPORT.md` - Complete system architecture
-- `PERCEPTION_ACCURACY_IMPROVEMENTS.md` - Perception improvements (32% accuracy boost)
-- `ORCHESTRATION_PLAN.md` - Multi-agent design
-- `PICKANDLIFT_INTEGRATION_GUIDE.md` - Pick-and-lift implementation
+Detailed guides in `docs/` folder:
+- `FRAMEWORK_REPORT.md` - System architecture and completed tasks
+- `RLBENCH_TASK_UNDERSTANDING.md` - Task implementation guide for replication
 
 ## Troubleshooting
 
-**Colors not detected correctly:**
-- Ensure proper lighting in RLBench scene
+**Detection confidence low:**
 - Adjust GroundingDINO thresholds in perception_orchestration_server.py
+- Improve detection prompts with color and shape descriptors
 
-**Path planning failures:**
-- Check target position is within robot workspace
-- Enable collision_checking parameter
+**Position outside workspace:**
+- Verify camera-to-base coordinate transformation
+- Use ground truth comparison for debugging
 
 **Model not loading:**
-- Verify GroundingDINO model files are in `multi_tool_agent/ros_mcp_server/model/`
+- Confirm GroundingDINO weights in `multi_tool_agent/ros_mcp_server/model/`
+- Check CUDA availability for GPU inference
 
 ## Contributing
 
-Contributions welcome! Please read the documentation in `docs/` before submitting PRs.
+Contributions welcome! Review documentation in `docs/` before submitting pull requests.
 
 ## License
 
@@ -156,5 +149,5 @@ Contributions welcome! Please read the documentation in `docs/` before submittin
 
 - Google Agent Development Kit (ADK)
 - RLBench robotic manipulation benchmark
-- GroundingDINO for open-vocabulary detection
-- DeepSeek for LLM models
+- GroundingDINO open-vocabulary object detection
+- DeepSeek and OpenAI language models
