@@ -6,7 +6,7 @@ litellm==1.74.0.post1
 mcp==1.21.2
 
 # Vision & Perception
-groundingdino-py==0.4.0
+ultralytics>=8.1.0
 opencv-python-headless==4.12.0.88
 supervision==0.6.0
 pycocotools==2.0.10

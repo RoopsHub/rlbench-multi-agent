@@ -2,7 +2,7 @@
 """
 Perception MCP Server for Object Detection
 
-Using GroundingDINO for open-vocabulary detection (Phase 2)
+Using YOLO-World for open-vocabulary detection (Phase 2)
 """
 
 import sys
@@ -12,36 +12,33 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from PIL import Image
 import os
-import torch
-from groundingdino.util.inference import load_model, load_image, predict
+
+# Suppress ultralytics stdout output that corrupts MCP's JSON-RPC stdio channel
+os.environ["YOLO_VERBOSE"] = "false"
+_orig_stdout = sys.stdout
+sys.stdout = sys.stderr
+from ultralytics import YOLOWorld
+sys.stdout = _orig_stdout
 
 mcp = FastMCP("perception-server")
 
 # ==============================================================================
-# Initialize GroundingDINO Model
+# Initialize YOLO-World Model
 # ==============================================================================
 
-MODEL_DIR = Path(__file__).parent / "model"
-CONFIG_PATH = MODEL_DIR / "GroundingDINO_SwinT_OGC.py"
-WEIGHTS_PATH = MODEL_DIR / "groundingdino_swint_ogc.pth"
-
-print(f"[Perception] Loading GroundingDINO model...", file=sys.stderr)
-print(f"[Perception] Config: {CONFIG_PATH}", file=sys.stderr)
-print(f"[Perception] Weights: {WEIGHTS_PATH}", file=sys.stderr)
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"[Perception] Using device: {DEVICE}", file=sys.stderr)
+print(f"[Perception] Loading YOLO-World model...", file=sys.stderr)
 
 try:
-    GROUNDING_DINO_MODEL = load_model(
-        model_config_path=str(CONFIG_PATH),
-        model_checkpoint_path=str(WEIGHTS_PATH),
-        device=DEVICE
-    )
-    print(f"[Perception] ✓ GroundingDINO model loaded successfully", file=sys.stderr)
+    _orig_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    WEIGHTS_PATH = Path(__file__).resolve().parent / "model" / "yolov8s-worldv2.pt"
+    YOLO_WORLD_MODEL = YOLOWorld(str(WEIGHTS_PATH))
+    sys.stdout = _orig_stdout
+    print(f"[Perception] ✓ YOLO-World model loaded successfully", file=sys.stderr)
 except Exception as e:
-    print(f"[Perception] ✗ Failed to load GroundingDINO: {e}", file=sys.stderr)
-    GROUNDING_DINO_MODEL = None
+    sys.stdout = _orig_stdout
+    print(f"[Perception] ✗ Failed to load YOLO-World: {e}", file=sys.stderr)
+    YOLO_WORLD_MODEL = None
 
 
 # ==============================================================================
@@ -53,12 +50,12 @@ def verify_color_from_bbox(image: np.ndarray, bbox: np.ndarray, label: str) -> s
     Verify actual color in bounding box using LAB color space analysis.
     LAB is more perceptually uniform than HSV and better for color discrimination.
 
-    Corrects color labels when GroundingDINO mislabels objects.
+    Corrects color labels when the detector mislabels objects.
 
     Args:
         image: BGR image from cv2.imread
         bbox: [x1, y1, x2, y2] bounding box coordinates
-        label: Original label from GroundingDINO
+        label: Original label from detector
 
     Returns:
         Corrected label with verified color
@@ -306,8 +303,8 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
         intrinsics = np.load(intrinsics_path)  # [fx, fy, cx, cy]
         camera_pose = np.load(pose_path)  # 4x4 matrix: base to camera
 
-        # Load image using GroundingDINO's load_image (returns BGR from cv2.imread)
-        image_source, image_transformed = load_image(rgb_path)
+        # Load image as BGR numpy array (for color verification)
+        image_source = cv2.imread(rgb_path)
 
         height, width = image_source.shape[:2]
         fx, fy, cx, cy = intrinsics
@@ -319,65 +316,56 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
         print(f"[Tool: detect_object_3d] Image size: {width}x{height}", file=sys.stderr)
         print(f"[Tool: detect_object_3d] Camera intrinsics: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}", file=sys.stderr)
 
-        # PHASE 2: GroundingDINO for text-based object detection
-        if GROUNDING_DINO_MODEL is not None:
-            print(f"[Tool: detect_object_3d] Using GroundingDINO with RGB color space", file=sys.stderr)
+        # PHASE 2: YOLO-World for text-based object detection
+        if YOLO_WORLD_MODEL is not None:
+            print(f"[Tool: detect_object_3d] Using YOLO-World", file=sys.stderr)
 
-            # Run detection
-            # Lowered thresholds to detect small/low-contrast objects (e.g., crumpled paper)
-            BOX_THRESHOLD = 0.20  # Was 0.35, reduced for small objects
-            TEXT_THRESHOLD = 0.15  # Was 0.25, more lenient text matching
+            # Parse period-separated prompt into class list
+            classes = [c.strip() for c in text_prompt.split(".") if c.strip()]
+            YOLO_WORLD_MODEL.set_classes(classes)
 
-            boxes, logits, phrases = predict(
-                model=GROUNDING_DINO_MODEL,
-                image=image_transformed,
-                caption=text_prompt,
-                box_threshold=BOX_THRESHOLD,
-                text_threshold=TEXT_THRESHOLD,
-                device=DEVICE
-            )
+            CONF_THRESHOLD = 0.20
 
-            if len(boxes) > 0:
-                # Boxes are in normalized [cx, cy, w, h] format
+            # Redirect stdout to stderr during predict to avoid corrupting MCP stdio
+            _orig_stdout = sys.stdout
+            sys.stdout = sys.stderr
+            results = YOLO_WORLD_MODEL.predict(rgb_path, conf=CONF_THRESHOLD, verbose=False)
+            sys.stdout = _orig_stdout
+            result = results[0]
+
+            if len(result.boxes) > 0:
                 h, w = image_source.shape[:2]
 
-                # PHASE 1: Return ALL detections instead of just best one
-                print(f"[Tool: detect_object_3d] Found {len(boxes)} detection(s)", file=sys.stderr)
+                print(f"[Tool: detect_object_3d] Found {len(result.boxes)} detection(s)", file=sys.stderr)
 
                 all_detections = []
-                for idx in range(len(boxes)):
-                    box = boxes[idx].numpy()
-                    confidence = logits[idx].item()
-                    phrase = phrases[idx]
+                for idx in range(len(result.boxes)):
+                    box = result.boxes[idx]
+                    x1_det, y1_det, x2_det, y2_det = box.xyxy[0].cpu().numpy().astype(int)
+                    confidence_det = float(box.conf[0].cpu())
+                    class_id = int(box.cls[0].cpu())
+                    phrase_det = result.names[class_id]
 
-                    # Convert normalized [cx, cy, w, h] to pixel coordinates
-                    cx_norm, cy_norm, w_norm, h_norm = box
-                    cx_pixel = int(cx_norm * w)
-                    cy_pixel = int(cy_norm * h)
-                    w_pixel = int(w_norm * w)
-                    h_pixel = int(h_norm * h)
+                    # Clamp to image bounds
+                    x1_det = max(0, x1_det)
+                    y1_det = max(0, y1_det)
+                    x2_det = min(w - 1, x2_det)
+                    y2_det = min(h - 1, y2_det)
 
-                    # Calculate corners
-                    x1 = max(0, cx_pixel - w_pixel // 2)
-                    y1 = max(0, cy_pixel - h_pixel // 2)
-                    x2 = min(w - 1, cx_pixel + w_pixel // 2)
-                    y2 = min(h - 1, cy_pixel + h_pixel // 2)
-
-                    # Note: Color filtering disabled - colors are random in RLBench
-                    # TODO: Use RLBench ground truth for object validation instead
+                    cx_pixel = (x1_det + x2_det) // 2
+                    cy_pixel = (y1_det + y2_det) // 2
 
                     all_detections.append({
-                        'phrase': phrase,
-                        'confidence': confidence,
-                        'center': (cx_pixel, cy_pixel),
-                        'bbox': (x1, y1, x2, y2)
+                        'phrase': phrase_det,
+                        'confidence': confidence_det,
+                        'center': (int(cx_pixel), int(cy_pixel)),
+                        'bbox': (int(x1_det), int(y1_det), int(x2_det), int(y2_det))
                     })
 
-                    print(f"[Tool: detect_object_3d]   [{idx}] '{phrase}' at ({cx_pixel}, {cy_pixel}), conf={confidence:.3f}", file=sys.stderr)
+                    print(f"[Tool: detect_object_3d]   [{idx}] '{phrase_det}' at ({cx_pixel}, {cy_pixel}), conf={confidence_det:.3f}", file=sys.stderr)
 
-                # Use highest confidence detection from filtered results (backward compatible)
+                # Use highest confidence detection (backward compatible)
                 if len(all_detections) > 0:
-                    # Find detection with highest confidence
                     best_detection = max(all_detections, key=lambda d: d['confidence'])
                     best_idx = all_detections.index(best_detection)
 
@@ -385,14 +373,11 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                     x1, y1, x2, y2 = best_detection['bbox']
                     confidence = best_detection['confidence']
 
-                    # Verify and correct color for best detection
-                    original_phrase = best_detection['phrase']
-                    phrase = verify_color_from_bbox(image_source, np.array([x1, y1, x2, y2]), original_phrase)
+                    phrase = best_detection['phrase']
 
                     print(f"[Tool: detect_object_3d] ✓ Using detection [{best_idx}]: '{phrase}'", file=sys.stderr)
-                    print(f"[Tool: detect_object_3d]   Bounding box: [{x1:.0f}, {y1:.0f}, {x2:.0f}, {y2:.0f}]", file=sys.stderr)
+                    print(f"[Tool: detect_object_3d]   Bounding box: [{x1}, {y1}, {x2}, {y2}]", file=sys.stderr)
                 else:
-                    # All detections filtered out - fallback
                     pixel_x = width // 2
                     pixel_y = height // 2
                     confidence = 0.0
@@ -406,12 +391,12 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                 phrase = "none"
                 print(f"[Tool: detect_object_3d] ⚠ No objects detected, using center: ({pixel_x}, {pixel_y})", file=sys.stderr)
         else:
-            # GroundingDINO not available - fallback to image center
+            # YOLO-World not available - fallback to image center
             pixel_x = width // 2
             pixel_y = height // 2
             confidence = 0.0
             phrase = "fallback"
-            print(f"[Tool: detect_object_3d] ⚠ GroundingDINO not loaded, using center: ({pixel_x}, {pixel_y})", file=sys.stderr)
+            print(f"[Tool: detect_object_3d] ⚠ YOLO-World not loaded, using center: ({pixel_x}, {pixel_y})", file=sys.stderr)
 
         # PHASE 2: Calculate 3D positions for ALL detections
         objects_with_3d = []
@@ -425,9 +410,7 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                 for idx, detection in enumerate(all_detections):
                     bbox = detection['bbox']
 
-                    # Verify and correct color using LAB analysis
-                    original_phrase = detection['phrase']
-                    verified_phrase = verify_color_from_bbox(image_source, np.array(bbox), original_phrase)
+                    verified_phrase = detection['phrase']
 
                     X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam, bbox_3d_info = _extract_3d_position(
                         bbox, depth, point_cloud, fx, fy, cx, cy
@@ -497,7 +480,7 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
             "position_camera_frame": [float(X_cam), float(Y_cam), float(Z_cam)],
             "detection_2d": {"x": int(pixel_x), "y": int(pixel_y)},
             "confidence": confidence if 'confidence' in locals() else 0.5,
-            "method": "groundingdino" if GROUNDING_DINO_MODEL and 'phrase' in locals() and phrase != "none" else "fallback",
+            "method": "yoloworld" if YOLO_WORLD_MODEL and 'phrase' in locals() and phrase != "none" else "fallback",
             "note": "Phase 2: Multi-object detection with 3D positions for all objects"
         }
 
@@ -532,8 +515,8 @@ if __name__ == "__main__":
     print("Tools available:", file=sys.stderr)
     print("  1. detect_object_3d - Detect object and return 3D position", file=sys.stderr)
     print("=" * 70, file=sys.stderr)
-    print("NOTE: Current implementation uses simplified detection", file=sys.stderr)
-    print("TODO: Integrate GroundingDINO for open-vocabulary detection", file=sys.stderr)
+    print("NOTE: Using YOLO-World for open-vocabulary detection", file=sys.stderr)
+    print("Model: yolov8s-worldv2 (auto-downloaded on first run)", file=sys.stderr)
     print("=" * 70, file=sys.stderr)
     print("", file=sys.stderr)
 
