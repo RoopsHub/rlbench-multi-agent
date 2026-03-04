@@ -49,6 +49,7 @@ debug_out/
 .pytest_cache/
 .coverage
 htmlcov/
+test_*.py
 
 # RLBench sensor data (generated at runtime)
 multi_tool_agent/ros_mcp_server/sensor_data/
