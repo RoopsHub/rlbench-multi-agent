@@ -56,7 +56,7 @@ def verify_color_from_bbox(image: np.ndarray, bbox: np.ndarray, label: str) -> s
     Corrects color labels when GroundingDINO mislabels objects.
 
     Args:
-        image: BGR image from cv2.imread
+        image: RGB image (as returned by GroundingDINO's load_image via PIL)
         bbox: [x1, y1, x2, y2] bounding box coordinates
         label: Original label from GroundingDINO
 
@@ -76,8 +76,8 @@ def verify_color_from_bbox(image: np.ndarray, bbox: np.ndarray, label: str) -> s
         if roi.size == 0:
             return label
 
-        # Convert BGR to LAB color space
-        roi_lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
+        # Convert RGB to LAB color space (image_source from GroundingDINO's load_image is RGB)
+        roi_lab = cv2.cvtColor(roi, cv2.COLOR_RGB2LAB)
 
         # Sample center 50% of bbox (avoid edges/shadows)
         roi_h, roi_w = roi_lab.shape[:2]
@@ -124,16 +124,16 @@ def verify_color_from_bbox(image: np.ndarray, bbox: np.ndarray, label: str) -> s
             return label
 
         # Simple LAB color classification using a* and b* thresholds
-        # Adapted for RLBench where red objects have blue tint (b < 0)
         detected_color = None
 
-        # Red group — RLBench red always has a > 30
+        # Red/pink/orange group — high a (red-shifted)
         if a_centered > 30:
-            # RLBench bias: red objects often have b around -60 to -80 (blueish)
-            if b_centered > 40:
+            if b_centered < -20:
+                detected_color = "pink"   # Pink/magenta: high a AND blue-shifted b
+            elif b_centered > 50:
                 detected_color = "orange"
             else:
-                detected_color = "red"  # Includes red with blue tint
+                detected_color = "red"
 
         # Green group
         elif a_centered < -30:
@@ -306,7 +306,7 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
         intrinsics = np.load(intrinsics_path)  # [fx, fy, cx, cy]
         camera_pose = np.load(pose_path)  # 4x4 matrix: base to camera
 
-        # Load image using GroundingDINO's load_image (returns BGR from cv2.imread)
+        # Load image using GroundingDINO's load_image (PIL-based, returns RGB numpy array)
         image_source, image_transformed = load_image(rgb_path)
 
         height, width = image_source.shape[:2]
@@ -344,11 +344,18 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                 # PHASE 1: Return ALL detections instead of just best one
                 print(f"[Tool: detect_object_3d] Found {len(boxes)} detection(s)", file=sys.stderr)
 
+                # Extract color words from prompt for color-match filtering
+                _KNOWN_COLORS = {"red", "blue", "green", "yellow", "orange", "pink",
+                                 "purple", "white", "black", "gray", "grey", "brown",
+                                 "cyan", "magenta"}
+                requested_colors = {word for word in text_prompt.lower().replace('.', ' ').split()
+                                    if word in _KNOWN_COLORS}
+
                 all_detections = []
                 for idx in range(len(boxes)):
                     box = boxes[idx].numpy()
                     confidence = logits[idx].item()
-                    phrase = phrases[idx]
+                    raw_phrase = phrases[idx]
 
                     # Convert normalized [cx, cy, w, h] to pixel coordinates
                     cx_norm, cy_norm, w_norm, h_norm = box
@@ -363,55 +370,45 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                     x2 = min(w - 1, cx_pixel + w_pixel // 2)
                     y2 = min(h - 1, cy_pixel + h_pixel // 2)
 
-                    # Note: Color filtering disabled - colors are random in RLBench
-                    # TODO: Use RLBench ground truth for object validation instead
+                    # Verify color via LAB (done per-detection so we can use it for selection)
+                    verified_phrase = verify_color_from_bbox(
+                        image_source, np.array([x1, y1, x2, y2]), raw_phrase)
 
                     all_detections.append({
-                        'phrase': phrase,
+                        'phrase': raw_phrase,
+                        'verified_phrase': verified_phrase,
                         'confidence': confidence,
                         'center': (cx_pixel, cy_pixel),
                         'bbox': (x1, y1, x2, y2)
                     })
 
-                    print(f"[Tool: detect_object_3d]   [{idx}] '{phrase}' at ({cx_pixel}, {cy_pixel}), conf={confidence:.3f}", file=sys.stderr)
+                    print(f"[Tool: detect_object_3d]   [{idx}] '{raw_phrase}' → '{verified_phrase}' "
+                          f"at ({cx_pixel},{cy_pixel}), conf={confidence:.3f}", file=sys.stderr)
 
-                # Use highest confidence detection from filtered results (backward compatible)
-                if len(all_detections) > 0:
-                    # Find detection with highest confidence
-                    best_detection = max(all_detections, key=lambda d: d['confidence'])
-                    best_idx = all_detections.index(best_detection)
+                # Prefer detections whose verified color matches the requested color
+                color_matched = [d for d in all_detections
+                                 if any(c in d['verified_phrase'].lower()
+                                        for c in requested_colors)]
+                candidates = color_matched if color_matched else all_detections
+                best_detection = max(candidates, key=lambda d: d['confidence'])
+                best_idx = all_detections.index(best_detection)
 
-                    pixel_x, pixel_y = best_detection['center']
-                    x1, y1, x2, y2 = best_detection['bbox']
-                    confidence = best_detection['confidence']
+                pixel_x, pixel_y = best_detection['center']
+                x1, y1, x2, y2 = best_detection['bbox']
+                confidence = best_detection['confidence']
+                phrase = best_detection['verified_phrase']
 
-                    # Verify and correct color for best detection
-                    original_phrase = best_detection['phrase']
-                    phrase = verify_color_from_bbox(image_source, np.array([x1, y1, x2, y2]), original_phrase)
-
-                    print(f"[Tool: detect_object_3d] ✓ Using detection [{best_idx}]: '{phrase}'", file=sys.stderr)
-                    print(f"[Tool: detect_object_3d]   Bounding box: [{x1:.0f}, {y1:.0f}, {x2:.0f}, {y2:.0f}]", file=sys.stderr)
-                else:
-                    # All detections filtered out - fallback
-                    pixel_x = width // 2
-                    pixel_y = height // 2
-                    confidence = 0.0
-                    phrase = "none"
-                    print(f"[Tool: detect_object_3d] ⚠ All detections filtered out, using center: ({pixel_x}, {pixel_y})", file=sys.stderr)
+                match_note = "color-matched" if color_matched else "best confidence (no color match)"
+                print(f"[Tool: detect_object_3d] ✓ Using [{best_idx}] ({match_note}): '{phrase}'", file=sys.stderr)
+                print(f"[Tool: detect_object_3d]   Bbox: [{x1},{y1},{x2},{y2}]", file=sys.stderr)
             else:
-                # No detection - fallback to image center
-                pixel_x = width // 2
-                pixel_y = height // 2
-                confidence = 0.0
-                phrase = "none"
-                print(f"[Tool: detect_object_3d] ⚠ No objects detected, using center: ({pixel_x}, {pixel_y})", file=sys.stderr)
+                # No detection — return failure, do not guess image center
+                print(f"[Tool: detect_object_3d] ✗ No objects detected for: '{text_prompt}'", file=sys.stderr)
+                return {"success": False, "error": f"No objects detected for prompt: '{text_prompt}'"}
         else:
-            # GroundingDINO not available - fallback to image center
-            pixel_x = width // 2
-            pixel_y = height // 2
-            confidence = 0.0
-            phrase = "fallback"
-            print(f"[Tool: detect_object_3d] ⚠ GroundingDINO not loaded, using center: ({pixel_x}, {pixel_y})", file=sys.stderr)
+            # GroundingDINO not loaded
+            print(f"[Tool: detect_object_3d] ✗ GroundingDINO model not loaded", file=sys.stderr)
+            return {"success": False, "error": "GroundingDINO model not loaded"}
 
         # PHASE 2: Calculate 3D positions for ALL detections
         objects_with_3d = []
@@ -425,9 +422,8 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                 for idx, detection in enumerate(all_detections):
                     bbox = detection['bbox']
 
-                    # Verify and correct color using LAB analysis
-                    original_phrase = detection['phrase']
-                    verified_phrase = verify_color_from_bbox(image_source, np.array(bbox), original_phrase)
+                    # Use already-verified phrase from the detection loop
+                    verified_phrase = detection['verified_phrase']
 
                     X_base, Y_base, Z_base, X_cam, Y_cam, Z_cam, bbox_3d_info = _extract_3d_position(
                         bbox, depth, point_cloud, fx, fy, cx, cy
