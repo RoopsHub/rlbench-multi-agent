@@ -214,7 +214,7 @@ DETECTION_STRATEGY = """
 | ReachTarget | `detection_prompt` | `position_3d` |
 | PickAndLift | `"red cube . red sphere"` (multi-object) | Both from `objects[]` array (detected positions) |
 | PushButton | `detection_prompt` | `position_3d` |
-| PutRubbishInBin | `"trash . bin"` (multi-object) | Both from `objects[]` array (detected positions) |
+| PutRubbishInBin | `"crumpled silver paper . bin"` (multi-object) | Both from `objects[]` array (detected positions) |
 | StackBlocks | `"red cube"` (detects all cubes including green stacking zone) | All from `objects[]` array - green cube is stacking zone, select 2 highest confidence red cubes |
 
 **StackBlocks Special Detection:**
@@ -284,7 +284,7 @@ perception_agent = Agent(
 ## TOOLS
 - `detect_object_3d(text_prompt, rgb_path, depth_path, intrinsics_path, pose_path, pointcloud_path)`
   - Single object: `"red cube"` → `position_3d`
-  - Multi-object: `"trash . bin"` → `objects[]` array
+  - Multi-object: `"crumpled silver paper . bin"` → `objects[]` array
 
 ## WORKFLOW
 1. Read sensor paths from SensingAgent output
@@ -431,7 +431,7 @@ HANDLING USER RESPONSES:
 2. 👁️ PERCEPTION
    - detect_object_3d(detection_prompt, paths...)
    - For PickAndLift: use "red cube . red sphere" to detect both objects
-   - For PutRubbishInBin: use "trash . bin" to detect both objects
+   - For PutRubbishInBin: use "crumpled silver paper . bin" to detect both objects
    - Extract positions from objects[] array based on task type
 
 3. 🦾 MOTION
@@ -463,7 +463,7 @@ Example:
 
 ### PutRubbishInBin - DETECT BOTH OBJECTS!
 ```
-- Detect BOTH trash AND bin: detect_object_3d("trash . bin", ...)
+- Detect BOTH trash AND bin: detect_object_3d("crumpled silver paper . bin", ...)
 - Extract positions from objects[] array in response
 - Grasp trash at trash_z + 0.015 (1.5cm above to avoid IK/collision)
 - Keep gripper CLOSED while lifting and moving to bin

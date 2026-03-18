@@ -30,6 +30,10 @@ from rlbench.observation_config import ObservationConfig
 from rlbench.tasks import ReachTarget, PickAndLift, PushButton, PutRubbishInBin, StackBlocks
 from rlbench.backend.exceptions import InvalidActionError
 
+# Experiment logger (shared with perception server via disk)
+sys.path.insert(0, str(Path(__file__).parent))
+import experiment_logger as exp_log
+
 # ==============================================================================
 # Global State
 # ==============================================================================
@@ -41,6 +45,11 @@ _TASK = None
 _CURRENT_OBS = None
 _TASK_CLASS = None  # No default - wait for reset_task() call
 _TASK_DESCRIPTION = ""  # Store task description from reset
+
+# Evaluation state (reset each trial)
+_TRIAL_ID = None
+_TRIAL_START_TIME = None
+_MOTION_STEP = 0
 
 # Output directory for sensor data
 OUTPUT_DIR = Path(__file__).parent / "sensor_data"
@@ -125,8 +134,8 @@ def parse_task_objects(task_description: str) -> list:
         ('cup', 'cup'),
         ('button', 'button'),
         ('bin', 'bin'),
-        ('trash', 'trash'),
-        ('rubbish', 'trash'),
+        ('trash', 'crumpled silver paper'),
+        ('rubbish', 'crumpled silver paper'),
         ('target', 'sphere'),  # "target" usually refers to sphere in reach tasks
     ]
 
@@ -140,7 +149,7 @@ def parse_task_objects(task_description: str) -> list:
         'bin': 'basket, bin, container',  # Visual (basket) helps detect wire mesh
         'trash': 'crumpled silver paper' if is_trash_task else 'paper, trash, crumpled paper, rubbish, garbage',
         'button': 'button, switch',
-        'sphere': 'sphere, ball',
+        'sphere': 'sphere',
         'cube': 'cube, block',
     }
 
@@ -355,7 +364,9 @@ def move_to_position(x: float, y: float, z: float, use_planning: bool = True) ->
             action = np.concatenate([target_pos, current_pose[3:7], [current_gripper_state]])
 
             # Execute with planning
+            _step_t0 = time.time()
             _CURRENT_OBS, reward, terminate = task.step(action)
+            _step_ms = (time.time() - _step_t0) * 1000
 
             # Restore original action mode
             _ENV._action_mode = original_action_mode
@@ -364,6 +375,22 @@ def move_to_position(x: float, y: float, z: float, use_planning: bool = True) ->
             final_pos = _CURRENT_OBS.gripper_pose[:3]
             final_distance = np.linalg.norm(final_pos - target_pos)
             print(f"[Tool: move_to_position] ✓ Reached via planning (error: {final_distance:.4f}m)", file=sys.stderr)
+
+            # Log motion step
+            global _MOTION_STEP
+            _MOTION_STEP += 1
+            exp_log.log_motion_step(
+                trial_id=_TRIAL_ID or "unknown",
+                task=_TASK_CLASS.__name__ if _TASK_CLASS else "unknown",
+                step=_MOTION_STEP,
+                target=[x, y, z],
+                final=final_pos.tolist(),
+                error_distance_m=float(final_distance),
+                task_completed=bool(terminate),
+                time_ms=_step_ms,
+                method="planning",
+                success=True,
+            )
 
             return {
                 "success": True,
@@ -385,6 +412,7 @@ def move_to_position(x: float, y: float, z: float, use_planning: bool = True) ->
             max_step_size = 0.001  # 1mm max per step
             max_iterations = int(distance / max_step_size) + 100
 
+            _ik_t0 = time.time()
             step_count = 0
             for i in range(max_iterations):
                 current_pos = current_pose[:3]
@@ -417,7 +445,23 @@ def move_to_position(x: float, y: float, z: float, use_planning: bool = True) ->
 
             final_pos = _CURRENT_OBS.gripper_pose[:3]
             final_distance = np.linalg.norm(final_pos - target_pos)
+            _ik_ms = (time.time() - _ik_t0) * 1000
             print(f"[Tool: move_to_position] ✓ Reached via IK (error: {final_distance:.4f}m, steps: {step_count})", file=sys.stderr)
+
+            # Log motion step
+            _MOTION_STEP += 1
+            exp_log.log_motion_step(
+                trial_id=_TRIAL_ID or "unknown",
+                task=_TASK_CLASS.__name__ if _TASK_CLASS else "unknown",
+                step=_MOTION_STEP,
+                target=[x, y, z],
+                final=final_pos.tolist(),
+                error_distance_m=float(final_distance),
+                task_completed=bool(terminate),
+                time_ms=_ik_ms,
+                method="ik",
+                success=True,
+            )
 
             return {
                 "success": True,
@@ -870,8 +914,14 @@ def load_task(task_name: str) -> dict:
         descriptions, _CURRENT_OBS = _TASK.reset()
 
         # Store task description globally
-        global _TASK_DESCRIPTION
+        global _TASK_DESCRIPTION, _TRIAL_ID, _TRIAL_START_TIME, _MOTION_STEP
         _TASK_DESCRIPTION = descriptions[0]
+
+        # Start a new evaluation trial
+        _TRIAL_START_TIME = time.time()
+        _MOTION_STEP = 0
+        _TRIAL_ID = exp_log.start_trial(task_name)
+        print(f"[Tool: load_task] ✓ Trial started: {_TRIAL_ID}", file=sys.stderr)
 
         print(f"[Tool: load_task] ✓ Ready: {descriptions[0]}", file=sys.stderr)
 

@@ -6,6 +6,7 @@ Using GroundingDINO for open-vocabulary detection (Phase 2)
 """
 
 import sys
+import time
 import numpy as np
 import cv2
 from pathlib import Path
@@ -14,6 +15,10 @@ from PIL import Image
 import os
 import torch
 from groundingdino.util.inference import load_model, load_image, predict
+
+# Experiment logger (shared with orchestration server via disk)
+sys.path.insert(0, str(Path(__file__).parent))
+import experiment_logger as exp_log
 
 mcp = FastMCP("perception-server")
 
@@ -320,6 +325,7 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
         print(f"[Tool: detect_object_3d] Camera intrinsics: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}", file=sys.stderr)
 
         # PHASE 2: GroundingDINO for text-based object detection
+        _inference_ms = 0.0  # populated after predict()
         if GROUNDING_DINO_MODEL is not None:
             print(f"[Tool: detect_object_3d] Using GroundingDINO with RGB color space", file=sys.stderr)
 
@@ -328,6 +334,7 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
             BOX_THRESHOLD = 0.20  # Was 0.35, reduced for small objects
             TEXT_THRESHOLD = 0.15  # Was 0.25, more lenient text matching
 
+            _pred_t0 = time.time()
             boxes, logits, phrases = predict(
                 model=GROUNDING_DINO_MODEL,
                 image=image_transformed,
@@ -336,6 +343,8 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                 text_threshold=TEXT_THRESHOLD,
                 device=DEVICE
             )
+            _inference_ms = (time.time() - _pred_t0) * 1000
+            print(f"[Tool: detect_object_3d] Inference time: {_inference_ms:.1f}ms", file=sys.stderr)
 
             if len(boxes) > 0:
                 # Boxes are in normalized [cx, cy, w, h] format
@@ -404,10 +413,28 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
             else:
                 # No detection — return failure, do not guess image center
                 print(f"[Tool: detect_object_3d] ✗ No objects detected for: '{text_prompt}'", file=sys.stderr)
+                exp_log.log_perception(
+                    trial_id=exp_log.get_current_trial_id(),
+                    task=text_prompt,
+                    success=False,
+                    confidence=0.0,
+                    inference_time_ms=_inference_ms,
+                    position_3d=None,
+                    failure_reason="no_detection",
+                )
                 return {"success": False, "error": f"No objects detected for prompt: '{text_prompt}'"}
         else:
             # GroundingDINO not loaded
             print(f"[Tool: detect_object_3d] ✗ GroundingDINO model not loaded", file=sys.stderr)
+            exp_log.log_perception(
+                trial_id=exp_log.get_current_trial_id(),
+                task=text_prompt,
+                success=False,
+                confidence=0.0,
+                inference_time_ms=0.0,
+                position_3d=None,
+                failure_reason="model_not_loaded",
+            )
             return {"success": False, "error": "GroundingDINO model not loaded"}
 
         # PHASE 2: Calculate 3D positions for ALL detections
@@ -507,6 +534,16 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
         if 'all_detections' in locals():
             result["all_detections"] = all_detections
             result["num_detections"] = len(all_detections)
+
+        # Log perception result
+        exp_log.log_perception(
+            trial_id=exp_log.get_current_trial_id(),
+            task=text_prompt,
+            success=result.get("success", False),
+            confidence=result.get("confidence", 0.0),
+            inference_time_ms=_inference_ms,
+            position_3d=result.get("position_3d"),
+        )
 
         return result
 
