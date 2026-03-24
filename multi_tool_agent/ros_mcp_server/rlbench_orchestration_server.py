@@ -524,7 +524,8 @@ def control_gripper(action: str) -> dict:
         return {
             "success": True,
             "action": action,
-            "gripper_state": "open" if gripper_value > 0.5 else "closed"
+            "gripper_state": "open" if gripper_value > 0.5 else "closed",
+            "task_completed": bool(terminate),
         }
 
     except Exception as e:

@@ -1,0 +1,6 @@
+task,n_trials,n_success,success_rate_pct,mean_total_time_s,std_total_time_s,mean_perception_confidence,mean_inference_ms,mean_motion_error_cm,fail_perception,fail_ik_error,fail_task_incomplete,fail_timeout
+PickAndLift,14,12,85.7,50.473,27.288,0.625,435.114,1.979,0,0,0,0
+PushButton,15,15,100.0,70.649,41.46,0.501,291.047,2.208,0,0,0,0
+ReachTarget,15,14,93.3,15.901,4.461,0.68,527.233,2.594,0,0,1,0
+PutRubbishInBin,15,14,93.3,36.358,7.947,0.761,453.113,0.798,0,0,1,0
+StackBlocks,15,12,80.0,65.247,10.52,0.775,1326.273,0.154,0,0,3,0

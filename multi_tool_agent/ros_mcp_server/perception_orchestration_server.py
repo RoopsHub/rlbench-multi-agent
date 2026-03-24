@@ -394,10 +394,15 @@ def detect_object_3d(text_prompt: str, rgb_path: str, depth_path: str,
                     print(f"[Tool: detect_object_3d]   [{idx}] '{raw_phrase}' → '{verified_phrase}' "
                           f"at ({cx_pixel},{cy_pixel}), conf={confidence:.3f}", file=sys.stderr)
 
-                # Prefer detections whose verified color matches the requested color
+                # Prefer detections whose verified color matches the requested color.
+                # "orange" is accepted as a match for "red" because RLBench red objects
+                # often have slightly yellow-shifted LAB b* values that cross the orange threshold.
+                expanded_colors = set(requested_colors)
+                if "red" in requested_colors:
+                    expanded_colors.add("orange")
                 color_matched = [d for d in all_detections
                                  if any(c in d['verified_phrase'].lower()
-                                        for c in requested_colors)]
+                                        for c in expanded_colors)]
                 candidates = color_matched if color_matched else all_detections
                 best_detection = max(candidates, key=lambda d: d['confidence'])
                 best_idx = all_detections.index(best_detection)

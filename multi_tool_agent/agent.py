@@ -163,43 +163,30 @@ Often task completes at contact (step 3). Check result before attempting push.
 ```
 **CRITICAL:** Gripper must stay CLOSED from step 4 through step 6. Only open at step 7 to release trash into bin.
 
-### StackBlocks (Gripper: Open→Close→Open, REPEATED 2 times)
-**Drop blocks from above onto stacking zone - simple and robust**
-```
-# STEP 0: Detect all cubes
-0. detect_object_3d("red cube")
-   # Green cube (LAB verified) = stacking zone [stack_x, stack_y, ignored_z]
-   # Red cubes (high confidence) = target blocks
-   # Select 2 red blocks with highest confidence
+### StackBlocks
 
-# CYCLE 1: Drop first block onto stacking zone
+**SETUP (once, before any movement):**
+- Call `get_target_position()` → save `sz_x, sz_y` from `stacking_zone_position` (ignore sz_z)
+- Call `detect_object_3d("red cube", ...)` → save `b1` and `b2` (2 highest-confidence red cubes)
+
+**PLACE BLOCK 1:**
 1. control_gripper("open")
-2. move_to_position(block_1_x, block_1_y, block_1_z + 0.15)   # above block 1
-3. move_to_position(block_1_x, block_1_y, block_1_z + 0.015)  # grasp height
-4. control_gripper("close")                                    # GRASP block 1
-5. move_to_position(block_1_x, block_1_y, block_1_z + 0.15)   # lift block
-6. move_to_position(stack_x, stack_y, 0.80)                   # 5cm above stacking zone
-7. control_gripper("open")                                     # DROP block 1 (gentle drop)
-8. move_to_position(stack_x, stack_y, 0.90)                   # retract up
+2. move_to_position(b1_x, b1_y, b1_z + 0.15)
+3. move_to_position(b1_x, b1_y, b1_z + 0.01)
+4. control_gripper("close")
+5. move_to_position(sz_x, sz_y, 0.80)
+6. control_gripper("open")
 
-# CYCLE 2: Drop second block on top of first
-9. move_to_position(block_2_x, block_2_y, block_2_z + 0.15)   # above block 2
-10. move_to_position(block_2_x, block_2_y, block_2_z + 0.015) # grasp height
-11. control_gripper("close")                                   # GRASP block 2
-12. move_to_position(block_2_x, block_2_y, block_2_z + 0.15)  # lift block
-13. move_to_position(stack_x, stack_y, 0.85)                  # 5cm above first block
-14. control_gripper("open")                                    # DROP block 2 (gentle drop)
-15. move_to_position(stack_x, stack_y, 0.90)                  # retract
-→ COMPLETE (2 blocks stacked)
-```
-⚠️ **CRITICAL:**
-- Use green cube for stack_x and stack_y ONLY (ignore green_z completely)
-- Block 1 drop height: z = 0.80 (5cm above table - gentle drop, won't bounce)
-- Block 2 drop height: z = 0.85 (5cm above first block)
-- After dropping, retract to z = 0.90 to clear the area
-- DO NOT try to place precisely - drop from low height and let gravity stack them
-- Must track state: blocks_stacked = 0, 1 after each drop
-- Select 2 red cubes with highest confidence
+**PLACE BLOCK 2:**
+7. move_to_position(b2_x, b2_y, b2_z + 0.15)
+8. move_to_position(b2_x, b2_y, b2_z + 0.01)
+9. control_gripper("close")
+10. move_to_position(sz_x, sz_y, 0.85)
+11. control_gripper("open")
+
+**RULES:**
+- Execute steps 1–11 in exact order. Do NOT skip or reorder any step.
+- sz_x, sz_y from get_target_position(). Use z=0.80 (block 1) and z=0.85 (block 2) — do NOT use sz_z.
 """
 
 DETECTION_STRATEGY = """
@@ -215,19 +202,19 @@ DETECTION_STRATEGY = """
 | PickAndLift | `"red cube . red sphere"` (multi-object) | Both from `objects[]` array (detected positions) |
 | PushButton | `detection_prompt` | `position_3d` |
 | PutRubbishInBin | `"crumpled silver paper . bin"` (multi-object) | Both from `objects[]` array (detected positions) |
-| StackBlocks | `"red cube"` (detects all cubes including green stacking zone) | All from `objects[]` array - green cube is stacking zone, select 2 highest confidence red cubes |
+| StackBlocks | `"red cube"` (only red blocks needed) | Stacking zone from `get_target_position()`; block positions from `objects[]` array |
 
 **StackBlocks Special Detection:**
-- Detect ALL cubes in scene: `detect_object_3d("red cube", ...)`
-- LAB color verification identifies green cube as stacking zone (different color)
-- Use green cube for X,Y position ONLY: [stack_x, stack_y] - ignore green_z
-- Drop from low heights: Block 1 at z=0.80 (5cm above table), Block 2 at z=0.85
+- Call `get_target_position()` FIRST → extract `stacking_zone_position` as [sz_x, sz_y, sz_z]
+- Then call `detect_object_3d("red cube", ...)` → select 2 highest-confidence red cubes
+- Drop heights: Block 1 at z=0.80, Block 2 at z=0.85 — use sz_x, sz_y ONLY from get_target_position(), ignore sz_z
 - Filter red cubes: select 2 blocks with highest confidence (ignore low confidence/achromatic)
 - Track which blocks have been dropped (avoid re-picking)
 
-**Ground Truth for Reference Only:**
-- **All tasks:** Ground truth available for comparison/validation but NOT used in motion execution.
-- System relies on perception (GroundingDINO + LAB color verification) for all object localization.
+**Ground Truth for Stacking Zone:**
+- **StackBlocks only:** `get_target_position()` provides the stacking zone — used directly for motion.
+- Stacking zone is a flat 2mm plane marker that GroundingDINO cannot reliably distinguish from green distractor blocks.
+- All other tasks: perception (GroundingDINO + LAB color verification) used for all object localization.
 
 **Multi-object syntax:** `"object1 . object2"` (period + space separator)
 """
@@ -252,7 +239,7 @@ sensing_agent = Agent(
 1. Read task type from approved plan
 2. `load_task(task_name)` → Loads and initializes the task
 3. `get_camera_observation()` → capture paths + detection_prompt
-4. `get_target_position()` → ground truth (for reference/validation only)
+4. `get_target_position()` → ground truth positions (stacking zone for StackBlocks; reference for others)
 5. Report all paths
 
 ## OUTPUT
@@ -426,17 +413,19 @@ HANDLING USER RESPONSES:
 1. 📡 SENSING
    - load_task(task_name)
    - get_camera_observation() → save detection_prompt
-   - get_target_position() → ground truth (for reference/validation only)
+   - get_target_position() → ground truth positions
 
 2. 👁️ PERCEPTION
-   - detect_object_3d(detection_prompt, paths...)
+   - For StackBlocks: use stacking_zone_position from get_target_position() as [sz_x, sz_y, sz_z]; detect_object_3d("red cube", ...) for block positions only
    - For PickAndLift: use "red cube . red sphere" to detect both objects
    - For PutRubbishInBin: use "crumpled silver paper . bin" to detect both objects
+   - All others: detect_object_3d(detection_prompt, paths...)
    - Extract positions from objects[] array based on task type
 
 3. 🦾 MOTION
    - Execute exact sequence from MOTION SEQUENCES
-   - Use detected positions (NOT ground truth)
+   - For StackBlocks: use sz_x, sz_y (ignore sz_z) from get_target_position(); z=0.80 block 1, z=0.85 block 2
+   - All other tasks: use detected positions (NOT ground truth)
    - Report each step
 ```
 
@@ -472,26 +461,13 @@ Example:
 ```
 **CRITICAL:** Gripper MUST stay closed after grasping (step 4) until reaching bin release position (step 7). Do NOT open gripper during lift or transport.
 
-### StackBlocks - DROP FROM ABOVE APPROACH!
+### StackBlocks
 ```
-- Detect ALL cubes: detect_object_3d("red cube", ...)
-- LAB verification identifies green cube as stacking zone, red cubes as targets
-- Extract X,Y from green cube ONLY: stack_x = green_x, stack_y = green_y
-- IGNORE green_z completely - use fixed drop heights instead
-- Filter red cubes: select 2 with highest confidence (ignore achromatic/low confidence)
-- Execute 2 pick-drop cycles:
-  * Cycle 1: Drop block from z=0.80 (5cm above table - gentle drop)
-  * Cycle 2: Drop block from z=0.85 (5cm above first block)
-- Must track blocks_stacked state (0 → 1 → 2)
-- Gripper opens at drop height - gravity does the rest
-- Ground truth available for reference/validation only
+Setup: get_target_position() → sz_x, sz_y (ignore sz_z); detect_object_3d("red cube") → b1, b2
+
+Block 1: open → b1_z+0.15 → b1_z+0.02 → close → (sz_x, sz_y, 0.80) → open
+Block 2: b2_z+0.15 → b2_z+0.02 → close → (sz_x, sz_y, 0.85) → open
 ```
-⚠️ **CRITICAL:**
-- This is a LOOP task - repeat pick-drop sequence 2 times
-- Use green cube for X,Y coordinates ONLY - NEVER use green_z
-- Fixed drop heights: 0.80 for first block, 0.85 for second block (low and gentle)
-- DO NOT try to place precisely - drop from low height and let gravity stack
-- Track which blocks have been dropped (don't re-pick same block)
 
 ### ReachTarget vs PushButton
 ```
