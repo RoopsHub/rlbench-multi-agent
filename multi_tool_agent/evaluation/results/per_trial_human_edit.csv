@@ -1,0 +1,76 @@
+condition,task,risk_level,trial_num,trial_id,success,failure_reason,failure_step,planning_time_s,execution_time_s,total_time_s,edits_made,num_edits,edit_types,steps_edited,edit_detail,edit_targeted_failure_mode,perception_confidence,perception_inference_ms,motion_steps
+human_editing,StackBlocks,HIGH,1,20260420_142756_782130,True,,,90.0,86.0,176.0,True,2,edit,3|8,grap_offset 0.01 -> 0.015,True,0.74,9500.0,11
+human_editing,StackBlocks,HIGH,2,20260420_144811_601724,True,,,48.0,60.0,108.0,True,2,param,3|8,grasp offset 0.015,True,0.78,8000.0,11
+human_editing,StackBlocks,HIGH,3,20260420_145709_27729,True,,,49.0,58.0,107.0,True,2,param,3|8,grasp offset 0.015,True,0.78,9000.0,11
+human_editing,StackBlocks,HIGH,4,20260420_151204_481580,False,task_incomplete,8,52.0,87.0,139.0,True,2,param,3|8,grasp_offset -> 0.015,True,0.77,78.0,8
+human_editing,StackBlocks,HIGH,5,20260421_102725_505274,True,,,44.0,42.0,86.0,True,2,param|edit,3|5|8|10,"grasp_offset 0.015, stacking z coordinates reduced 1cm",True,0.77,9000.0,11
+human_editing,StackBlocks,HIGH,6,20260421_103341_178103,True,,,40.0,42.0,82.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.75,8000.0,11
+human_editing,StackBlocks,HIGH,7,20260421_103558_560987,True,,,46.0,44.0,90.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.79,8000.0,11
+human_editing,StackBlocks,HIGH,8,20260421_103731_844631,True,,,50.0,55.0,105.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.78,8000.0,11
+human_editing,StackBlocks,HIGH,9,20260421_104106_932339,True,,,46.0,48.0,94.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.76,9000.0,11
+human_editing,StackBlocks,HIGH,10,20260421_104221_27139,True,,,45.0,49.0,94.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.79,7000.0,11
+human_editing,StackBlocks,HIGH,11,20260421_104410_902975,True,,,44.0,48.0,92.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.43,10000.0,11
+human_editing,StackBlocks,HIGH,12,20260421_104545_618359,True,,,54.0,45.0,99.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.79,7000.0,11
+human_editing,StackBlocks,HIGH,13,20260421_104647_281734,True,,,38.0,50.0,88.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.79,10000.0,11
+human_editing,StackBlocks,HIGH,14,20260421_104747_869505,True,,,47.0,50.0,97.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.78,8000.0,11
+human_editing,StackBlocks,HIGH,15,20260421_104948_229330,True,,,42.0,52.0,94.0,True,2,param|edit,3|5|8|10,"grasp_offset to 0.015, stack z coordinates reduced 1cm",True,0.75,7000.0,11
+human_editing,PickAndLift,MEDIUM,1,20260421_164507_961884,True,,,24.0,49.0,73.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.54,8000.0,3
+human_editing,PickAndLift,MEDIUM,2,20260421_164741_312990,True,,,22.0,42.0,64.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.6,10000.0,3
+human_editing,PickAndLift,MEDIUM,3,20260421_164850_136331,True,,,22.0,30.0,52.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.54,9000.0,3
+human_editing,PickAndLift,MEDIUM,4,20260421_164947_993001,True,,,31.0,40.0,71.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.53,8000.0,3
+human_editing,PickAndLift,MEDIUM,5,20260421_165034_68623,True,,,44.0,42.0,86.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.66,11000.0,3
+human_editing,PickAndLift,MEDIUM,6,20260421_165120_778244,True,,,38.0,37.0,75.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.52,8000.0,3
+human_editing,PickAndLift,MEDIUM,7,20260421_165205_925103,True,,,37.0,31.0,68.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.51,12000.0,3
+human_editing,PickAndLift,MEDIUM,8,20260421_165253_443971,True,,,32.0,29.0,61.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.61,8000.0,3
+human_editing,PickAndLift,MEDIUM,9,20260421_165352_155285,True,,,23.0,25.0,48.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.6,8000.0,3
+human_editing,PickAndLift,MEDIUM,10,20260421_165526_315336,True,,,24.0,25.0,49.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.58,9000.0,3
+human_editing,PickAndLift,MEDIUM,11,20260421_171022_316735,True,,,31.0,50.0,81.0,True,1,param,3,grasp_offset 0.015→0.01,False,0.61,11000.0,3
+human_editing,PickAndLift,MEDIUM,12,20260421_172239_567022,False,perception_failed,3,36.0,31.0,67.0,True,1,,3,grasp_offset 0.015→0.01,True,0.69,12000.0,3
+human_editing,PickAndLift,MEDIUM,13,20260421_172353_545183,True,,,40.0,34.0,74.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.56,10000.0,3
+human_editing,PickAndLift,MEDIUM,14,20260421_172445_489900,True,,,32.0,36.0,68.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.62,9000.0,3
+human_editing,PickAndLift,MEDIUM,15,20260421_172522_218489,True,,,37.0,34.0,71.0,True,1,param,3,grasp_offset 0.015→0.01,True,0.58,7000.0,3
+human_editing,PutRubbishInBin,MEDIUM,1,20260423_114308_126738,True,,,29.0,34.0,63.0,True,1,remove,8,remove step 8,False,0.78,5000.0,4
+human_editing,PutRubbishInBin,MEDIUM,2,20260423_114855_391677,True,,,21.0,42.0,63.0,True,1,remove,8,remove step 8,False,0.71,6000.0,4
+human_editing,PutRubbishInBin,MEDIUM,3,20260423_115034_562995,True,,,26.0,32.0,58.0,True,1,remove,remove step 8,remove step 8,False,0.73,6000.0,4
+human_editing,PutRubbishInBin,MEDIUM,4,20260423_115128_390959,True,,,25.0,31.0,56.0,True,1,remove,8,remove step 8,False,0.74,5000.0,4
+human_editing,PutRubbishInBin,MEDIUM,5,20260423_115224_534998,True,,,25.0,35.0,60.0,True,1,remove,8,remove step 8,False,0.78,6000.0,4
+human_editing,PutRubbishInBin,MEDIUM,6,20260423_120044_904737,True,,,21.0,56.0,77.0,True,1,remove,8,remove step 8,False,0.7,13000.0,4
+human_editing,PutRubbishInBin,MEDIUM,7,20260423_120151_519562,True,,,16.0,34.0,50.0,False,0,,,,False,0.76,9000.0,4
+human_editing,PutRubbishInBin,MEDIUM,8,20260423_120247_904501,True,,,50.0,42.0,92.0,True,1,param,3,grasp offset 0.01,False,0.81,6000.0,4
+human_editing,PutRubbishInBin,MEDIUM,9,20260423_120423_715720,False,ik_error,5,25.0,52.0,77.0,True,1,param,3,grasp offset 0.01,False,0.68,6000.0,2
+human_editing,PutRubbishInBin,MEDIUM,10,20260423_120626_935371,True,,,20.0,45.0,65.0,False,0,,,,False,0.77,6000.0,4
+human_editing,PutRubbishInBin,MEDIUM,11,20260423_120724_682139,True,,,15.0,43.0,58.0,False,0,,,,False,0.76,13000.0,4
+human_editing,PutRubbishInBin,MEDIUM,12,20260423_120755_459126,False,ik_error,6,14.0,48.0,62.0,True,1,param,8,remove step 8,False,0.69,11000.0,2
+human_editing,PutRubbishInBin,MEDIUM,13,20260423_121023_953629,True,,,30.0,47.0,77.0,True,1,remove,8,remove step 8,False,0.76,12000.0,4
+human_editing,PutRubbishInBin,MEDIUM,14,20260423_121128_933752,True,,,23.0,45.0,68.0,False,0,,,,False,0.74,6000.0,4
+human_editing,PutRubbishInBin,MEDIUM,15,20260423_121206_352386,True,,,25.0,42.0,67.0,False,0,,,,False,0.6,6000.0,4
+human_editing,ReachTarget,LOW,1,20260424_132550_273086,True,,,36.0,24.0,60.0,True,1,param,2,approach height 0.12,False,0.68,9000.0,2
+human_editing,ReachTarget,LOW,2,20260424_132739_970880,True,,,34.0,23.0,57.0,True,1,param,approach height 0.12,approach height 0.12,False,0.69,9000.0,2
+human_editing,ReachTarget,LOW,3,20260424_132829_32025,True,,,18.0,15.0,33.0,False,0,,,,False,0.66,5000.0,2
+human_editing,ReachTarget,LOW,4,20260424_132907_531176,True,,,16.0,15.0,31.0,False,0,,,,False,0.67,5000.0,2
+human_editing,ReachTarget,LOW,5,20260424_132935_879614,True,,,14.0,24.0,38.0,False,0,,,,False,0.62,7000.0,2
+human_editing,ReachTarget,LOW,6,20260424_133307_310697,True,,,26.0,16.0,42.0,True,1,param,2,approach height 0.12,False,0.67,4000.0,2
+human_editing,ReachTarget,LOW,7,20260424_133354_649255,True,,,26.0,13.0,39.0,True,1,param,2,approach height 0.12,False,0.69,4000.0,1
+human_editing,ReachTarget,LOW,8,20260424_133455_989985,True,,,23.0,15.0,38.0,True,1,param,2,approach height 0.12,False,0.67,6000.0,2
+human_editing,ReachTarget,LOW,9,20260424_133545_409375,True,,,14.0,16.0,30.0,False,0,,,,False,0.64,4000.0,2
+human_editing,ReachTarget,LOW,10,20260424_133631_263884,True,,,15.0,18.0,33.0,False,0,,,,False,0.67,4000.0,2
+human_editing,ReachTarget,LOW,11,20260424_133701_128409,True,,,18.0,13.0,31.0,False,0,,,,False,0.65,8000.0,2
+human_editing,ReachTarget,LOW,12,20260424_133729_264563,True,,,10.0,20.0,30.0,False,0,,,,False,0.69,7000.0,2
+human_editing,ReachTarget,LOW,13,20260424_133752_195367,True,,,21.0,17.0,38.0,True,1,param,2,approach height 0.12,False,0.69,4000.0,2
+human_editing,ReachTarget,LOW,14,20260424_133838_470804,True,,,22.0,20.0,42.0,True,1,param,2,approach height 0.12,False,0.69,6000.0,2
+human_editing,ReachTarget,LOW,15,20260424_133936_704904,True,,,11.0,16.0,27.0,False,0,,,,False,0.67,6000.0,2
+human_editing,PushButton,LOW,1,20260424_134627_454157,True,,,29.0,14.0,43.0,True,2,remove,4|5,remove 4 and 5,False,0.76,3000.0,2
+human_editing,PushButton,LOW,2,20260424_134812_396570,True,,,28.0,21.0,49.0,True,2,remove,4|5,"remove 4 and 5 task completed by 3",False,0.52,6000.0,2
+human_editing,PushButton,LOW,3,20260424_134925_862712,True,,,20.0,20.0,40.0,False,0,,,,False,0.48,3000.0,2
+human_editing,PushButton,LOW,4,20260424_135001_436106,True,,,20.0,22.0,42.0,False,0,,,,False,0.48,4000.0,2
+human_editing,PushButton,LOW,5,20260506_153935_450246,True,,,16.0,17.0,33.0,False,0,,,,False,0.58,3000.0,2
+human_editing,PushButton,LOW,6,20260506_154048_499728,True,,,18.0,23.0,41.0,False,0,,,,False,0.61,3000.0,2
+human_editing,PushButton,LOW,7,20260506_154148_214819,True,,,21.0,15.0,36.0,False,0,,,,False,0.56,4000.0,2
+human_editing,PushButton,LOW,8,20260506_154251_556731,True,,,16.0,21.0,37.0,False,0,,,,False,0.43,6000.0,2
+human_editing,PushButton,LOW,9,20260506_154334_598449,True,,,28.0,16.0,44.0,True,1,remove,4|5,"remove 4 and 5 task completed by 3",False,0.43,4000.0,2
+human_editing,PushButton,LOW,10,20260506_154520_190310,True,,,16.0,21.0,37.0,False,0,,,,False,0.51,3000.0,2
+human_editing,PushButton,LOW,11,20260506_154552_318815,True,,,23.0,21.0,44.0,True,2,remove,4|5,remove 4 and 5 task completed by 3,False,0.54,4000.0,2
+human_editing,PushButton,LOW,12,20260506_154719_311716,True,,,15.0,26.0,41.0,False,0,,,,False,0.45,5000.0,2
+human_editing,PushButton,LOW,13,20260506_154750_618382,True,,,15.0,14.0,29.0,False,0,,,,False,0.42,6000.0,2
+human_editing,PushButton,LOW,14,20260506_154812_950118,True,,,15.0,21.0,36.0,False,0,,,,False,0.56,3000.0,2
+human_editing,PushButton,LOW,15,20260506_154848_801988,True,,,21.0,17.0,38.0,False,0,,,,False,0.62,3000.0,2
