@@ -70,6 +70,16 @@ multi_tool_agent/rlbench_test_output/
 ~/Downloads/
 ~/Pictures/
 
+# Paper planning
+PAPER_PLANNING.md
+graph.py
+fiq_rq2.png
+
+# Evaluation runtime state
+multi_tool_agent/evaluation/results/.current_trial_id
+multi_tool_agent/evaluation/manual_trial_logger.py
+multi_tool_agent/ros_mcp_server/experiment_logger.py
+
 # Old docs
 docs/DEMO_BASED_EXECUTION_README.md
 docs/IK_SOLVER_FINDINGS.md
