@@ -60,11 +60,11 @@ PATH_TO_PERCEPTION_SERVER = current_file_dir / "ros_mcp_server" / "perception_or
 # ==============================================================================
 
 # NOTE: Using deepseek-chat due to DeepSeek API validation changes (Dec 2025)
-# that break reasoning_content handling in Google ADK with tools.
+# that break reasoning_content handling in Google ADK with tools. Its fixed now
 
 #planning_model = LiteLlm(model="openrouter/mistralai/mistral-large-2512")#small-2603")#
 planning_model = LiteLlm(model="openai/gpt-5-mini")
-execution_model = LiteLlm(model="deepseek/deepseek-chat")
+execution_model = LiteLlm(model="deepseek/deepseek-reasoner")
 
 # ==============================================================================
 # MCP Toolsets
