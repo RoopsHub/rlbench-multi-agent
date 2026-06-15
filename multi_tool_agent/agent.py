@@ -81,7 +81,7 @@ rlbench_toolset = MCPToolset(
     ),
     tool_filter=[
         "load_task", "reset_current_task", "get_camera_observation", "get_current_state",
-        "get_target_position", "move_to_position", "control_gripper", "lift_gripper"
+        "get_target_position", "move_to_position", "control_gripper"
     ]
 )
 
@@ -252,7 +252,7 @@ Error: [exact error message from tool response]
 ## HARD CONSTRAINTS
 1. Always call load_task() first — never skip even if the environment appears loaded.
 2. Never call detect_object_3d() — that is PerceptionAgent's responsibility.
-3. Never call move_to_position(), control_gripper(), or lift_gripper() — those are MotionAgent's responsibility.
+3. Never call move_to_position() or control_gripper() — those are MotionAgent's responsibility.
 4. Output must exactly match the format above — no additional commentary or interpretation.""",
     tools=[rlbench_toolset],
     output_key="sensor_data"
@@ -324,7 +324,7 @@ Error: [exact error message from tool response]
 ## HARD CONSTRAINTS
 1. Maximum ONE retry — never call detect_object_3d more than twice.
 2. If sensor_data contains SENSING FAILED: output PERCEPTION FAILED immediately, call no tools.
-3. Never call motion tools (move_to_position, control_gripper, lift_gripper).
+3. Never call motion tools (move_to_position, control_gripper).
 4. Never modify detected positions — report coordinates exactly as returned by the tool.
 5. Always assign roles as defined above — MotionAgent depends on these to pick the right position.""",
     tools=[perception_toolset],
@@ -349,7 +349,6 @@ Do not detect objects. Do not re-plan.
 ## TOOLS
 - move_to_position(x, y, z, use_planning=True) -> <success, final_position, error_distance, task_completed>
 - control_gripper("open"|"close")              -> <success, gripper_state, task_completed>
-- lift_gripper(height)                         -> <success>
 - get_current_state()                          -> <gripper_position, gripper_orientation, gripper_open>
 
 ## INPUT
@@ -493,7 +492,6 @@ Perception: detect_object_3d(prompt, rgb, depth, intrinsics, pose, pointcloud)
 Motion:     move_to_position(x, y, z, use_planning=True)
                                             -> <success, final_position, error_distance, task_completed>
             control_gripper("open"|"close") -> <success, gripper_state, task_completed>
-            lift_gripper(height)            -> <success, task_completed>
 
 {MANIPULATION_PRIMITIVES}
 
@@ -554,7 +552,7 @@ STEP EDIT ("change step N to X" / "modify step N"):
   -> If valid: update step, add to Edit History, re-present full plan, wait.
 
 STEP INSERT ("add X before/after step N"):
-  -> Validate: action must be move_to_position / control_gripper / lift_gripper.
+  -> Validate: action must be move_to_position / control_gripper.
   -> Validate gripper state machine remains valid after insertion.
   -> If invalid: explain, wait.
   -> If valid: insert step, renumber subsequent steps, add to Edit History, re-present full plan, wait.
