@@ -62,6 +62,7 @@ PATH_TO_PERCEPTION_SERVER = current_file_dir / "ros_mcp_server" / "perception_or
 # NOTE: Using deepseek-chat due to DeepSeek API validation changes (Dec 2025)
 # that break reasoning_content handling in Google ADK with tools.
 
+#planning_model = LiteLlm(model="openrouter/mistralai/mistral-large-2512")#small-2603")#
 planning_model = LiteLlm(model="openai/gpt-5-mini")
 execution_model = LiteLlm(model="deepseek/deepseek-chat")
 
@@ -98,127 +99,93 @@ perception_toolset = MCPToolset(
 # Shared Instruction Components
 # ==============================================================================
 
-TASK_DEFINITIONS = """
-## TASK REFERENCE
+MANIPULATION_PRIMITIVES = """
+## MANIPULATION PRIMITIVES
+Compose a plan from these building blocks. Do NOT recall a memorized per-task step list —
+reason out which primitives the task needs and in what order.
 
-| Task | Keywords | Scene Objects | Gripper |
-|------|----------|---------------|---------|
-| ReachTarget | reach, touch, go to, target | Target sphere | OPEN throughout |
-| PickAndLift | pick and lift, lift block/cube | Colored blocks + target sphere | Open→Close→Keep closed |
-| PushButton | push/press button | Button panel | CLOSE first, push with fist |
-| PutRubbishInBin | put rubbish/trash in bin | Trash object + bin | Open→Close→Open (release) |
-| StackBlocks | stack blocks, build tower | 4 target blocks (same color) + 4 distractors | Open→Close→Open (repeated 2 times) |
+Each primitive maps to one or more tool calls the ExecutionPipeline runs:
+
+- OPEN_GRIPPER             -> control_gripper("open")
+- CLOSE_GRIPPER            -> control_gripper("close")
+- APPROACH_ABOVE(obj, h)   -> move_to_position(obj_x, obj_y, obj_z + h)   # h = approach_height
+- DESCEND_TO_GRASP(obj, o) -> move_to_position(obj_x, obj_y, obj_z + o)   # o = grasp_offset
+- TRANSPORT_TO(target, h)  -> move_to_position(tgt_x, tgt_y, tgt_z + h)   # gripper state unchanged
+- TOUCH(obj)               -> move_to_position(obj_x, obj_y, obj_z)
+- RETRACT(obj, h)          -> move_to_position(obj_x, obj_y, obj_z + h)
+
+obj_x/obj_y/obj_z are bound at execution time from PerceptionAgent detections (or from
+get_target_position() where SCENE FACTS say a target is not reliably detectable). You plan with the
+symbolic names — you do NOT know the numeric coordinates yet, and you must not invent them.
 """
 
-MOTION_SEQUENCES = """
-## MOTION SEQUENCES
+PLANNING_PRINCIPLES = """
+## PLANNING PRINCIPLES
+The plan is YOUR derivation from the task goal — not a lookup. Reason through these:
 
-### ReachTarget (Gripper: OPEN)
-```
-1. Keep gripper OPEN
-2. move_to_position(target_x, target_y, target_z + 0.1)  # above
-3. move_to_position(target_x, target_y, target_z)        # touch
-→ COMPLETE
-```
+1. Derive the gripper sequence from the GOAL, not from memory:
+   - Goal = touch / reach only          -> gripper OPEN throughout, never grasp.
+   - Goal = end while holding the object -> OPEN, grasp (CLOSE), stay CLOSED to the end.
+   - Goal = relocate then let go         -> OPEN, grasp (CLOSE), transport CLOSED, release (OPEN).
+   - Goal = press with the closed fist   -> CLOSE first, then push; never open.
+   - Goal = build/stack N objects        -> repeat the grasp -> transport -> release cycle once per object.
 
-### PickAndLift (Gripper: Open→Close→Closed)
-**Detect both cube AND sphere with `detect_object_3d("red cube . red sphere", ...)` - Use ground truth for reference only**
-**CRITICAL: Move cube TO detected sphere's full XYZ position!**
-```
-1. control_gripper("open")
-2. move_to_position(cube_x, cube_y, cube_z + 0.15)       # above cube
-3. move_to_position(cube_x, cube_y, cube_z + 0.015)       # grasp height
-4. control_gripper("close")                               # GRASP cube - KEEP CLOSED!
-5. move_to_position(sphere_x, sphere_y, sphere_z)        # DIRECTLY to detected sphere XYZ!
-→ COMPLETE (keep gripper closed)
-```
-⚠️ **Use detected sphere position from perception**, NOT ground truth! Both cube and sphere are detected via GroundingDINO.
-⚠️ No intermediate lift step - move directly from grasp to sphere position.
-⚠️ Gripper stays CLOSED at end (holding cube at target).
+2. Safe ordering for every grasp:
+   APPROACH_ABOVE -> DESCEND_TO_GRASP -> CLOSE_GRIPPER -> (lift / TRANSPORT_TO while CLOSED) -> release.
+   Never descend straight onto an object; never move laterally at object height while carrying.
 
-### PushButton (Gripper: CLOSE FIRST)
-```
-1. control_gripper("close")                               # FIRST!
-2. move_to_position(btn_x, btn_y, btn_z + 0.1)           # above
-3. move_to_position(btn_x, btn_y, btn_z)                 # contact
-4. Check if task_completed=true in result → if yes, skip to step 6
-5. move_to_position(btn_x, btn_y, btn_z - 0.003)         # shallow push (only if needed)
-6. move_to_position(btn_x, btn_y, btn_z + 0.1)           # retract
-→ COMPLETE
-```
-Often task completes at contact (step 3). Check result before attempting push.
+3. The gripper never changes state mid-transport (see GRIPPER STATE RULES).
 
-### PutRubbishInBin (Gripper: Open→Close→Open)
-**Detect both trash AND bin: `detect_object_3d("crumpled silver paper . bin", ...)` → objects[0]=trash, objects[1]=bin**
-**Use detected positions ONLY. Do NOT use get_target_position() for bin_x, bin_y, bin_z.**
-```
-1. control_gripper("open")
-2. move_to_position(trash_x, trash_y, trash_z + 0.15)    # above trash
-3. move_to_position(trash_x, trash_y, trash_z + 0.015)    # grasp height (1.5cm above)
-4. control_gripper("close")                               # GRASP trash - KEEP CLOSED!
-5. move_to_position(trash_x, trash_y, trash_z + 0.15)    # lift (gripper CLOSED)
-6. move_to_position(bin_x, bin_y, bin_z + 0.10)          # approach bin (gripper CLOSED)
-7. control_gripper("open")                                # release trash
-8. move_to_position(bin_x, bin_y, bin_z + 0.15)          # retract upward
-→ COMPLETE
-```
-**CRITICAL:** bin_x, bin_y, bin_z must come from detect_object_3d objects[phrase="bin"] — not from get_target_position().
-**CRITICAL:** Gripper must stay CLOSED from step 4 through step 6. Only open at step 7 to release trash into bin.
+4. Decide what to detect: list every object whose position the motion needs, and build a
+   GroundingDINO text prompt for each (colour + noun, e.g. "red cube . red sphere"). State these in
+   the plan's "Target / Perception spec" so PerceptionAgent knows what to localise. Multi-object
+   prompts use the "object1 . object2" syntax (period + space).
 
-### StackBlocks
+5. Perception vs ground truth: use detected positions for everything EXCEPT where SCENE FACTS say a
+   target is not reliably detectable — then take it from get_target_position().
 
-**SETUP (once, before any movement):**
-- Call `get_target_position()` → save `sz_x, sz_y` from `stacking_zone_position` (ignore sz_z)
-- Call `detect_object_3d("red cube", ...)` → save `b1` and `b2` (2 highest-confidence red cubes)
+6. Parameters (approach_height, grasp_offset, push_depth, bin_drop_height) are adjustable knobs with
+   defaults in TASK PARAMETERS. State the value you choose and justify when to increase/decrease it.
 
-**PLACE BLOCK 1:**
-1. control_gripper("open")
-2. move_to_position(b1_x, b1_y, b1_z + 0.15)
-3. move_to_position(b1_x, b1_y, b1_z + 0.015)
-4. control_gripper("close")
-5. move_to_position(sz_x, sz_y, 0.82)
-6. control_gripper("open")
-
-**PLACE BLOCK 2:**
-7. move_to_position(b2_x, b2_y, b2_z + 0.15)
-8. move_to_position(b2_x, b2_y, b2_z + 0.015)
-9. control_gripper("close")
-10. move_to_position(sz_x, sz_y, 0.87)
-11. control_gripper("open")
-
-**RULES:**
-- Execute steps 1–11 in exact order. Do NOT skip or reorder any step.
-- sz_x, sz_y from get_target_position(). Use z=0.82 (block 1) and z=0.87 (block 2) — do NOT use sz_z.
+7. Early stop: if any move returns task_completed=True, the task is already done — stop there.
 """
 
-DETECTION_STRATEGY = """
-## DETECTION STRATEGY
+SCENE_FACTS = """
+## SCENE FACTS
+World facts you cannot perceive at planning time. Reason WITH them — they are facts, not a recipe.
 
-**Use automatic detection prompts from `get_camera_observation()`:**
-- Returns `detection_prompt` string extracted from task description
-- Colors auto-verified via HSV analysis
+- A detected position_3d is the object's centre, resting on the table. Descend to grasp_offset above
+  the centre for reliable finger contact.
+- ReachTarget / PushButton: the target sphere / button is directly detectable from the detection prompt.
+- PickAndLift: success = the held object reaches the target sphere. Both the object and the sphere are
+  detectable; move the grasped object to the sphere's full detected XYZ (there is no separate lift target).
+- PushButton: RLBench signals completion on light contact, and a deep push can fail. Touch the button,
+  check task_completed, and only push ~push_depth further if it is not yet complete.
+- PutRubbishInBin: the bin IS detectable — take its position from detection, NOT from get_target_position().
+- StackBlocks: the stacking-zone marker is a flat 2 mm plane GroundingDINO cannot see. Take its x,y from
+  get_target_position() (its z is unreliable — ignore it). The stacking surface sits at z ~ 0.82, and each
+  block already placed raises the next drop by ~0.05 m (one block height). So the 1st block is placed at
+  z ~ 0.82 and the 2nd at z ~ 0.87. Reason the drop height per block from this rule.
+"""
 
-| Task | Detection | Position Source |
-|------|-----------|-----------------|
-| ReachTarget | `detection_prompt` | `position_3d` |
-| PickAndLift | `"red cube . red sphere"` (multi-object) | Both from `objects[]` array (detected positions) |
-| PushButton | `detection_prompt` | `position_3d` |
-| PutRubbishInBin | `"crumpled silver paper . bin"` (multi-object) | Both from `objects[]` array (detected positions) |
-| StackBlocks | `"red cube"` (only red blocks needed) | Stacking zone from `get_target_position()`; block positions from `objects[]` array |
+DETECTION_VOCAB = """
+## DETECTION VOCABULARY (perception-model calibration — use these EXACT phrases)
+You decide WHICH objects the task needs (PLANNING PRINCIPLE 4). But GroundingDINO only fires
+reliably on specific wordings — other phrasings have empirically failed to detect the targets.
+So phrase the detection prompt in the plan using these calibrated strings:
 
-**StackBlocks Special Detection:**
-- Call `get_target_position()` FIRST → extract `stacking_zone_position` as [sz_x, sz_y, sz_z]
-- Then call `detect_object_3d("red cube", ...)` → select 2 highest-confidence red cubes
-- Drop heights: Block 1 at z=0.80, Block 2 at z=0.85 — use sz_x, sz_y ONLY from get_target_position(), ignore sz_z
-- Filter red cubes: select 2 blocks with highest confidence (ignore low confidence/achromatic)
-- Track which blocks have been dropped (avoid re-picking)
+| Object(s) to locate           | Exact GroundingDINO phrase                       |
+|--------------------------------|--------------------------------------------------|
+| Reach target / button (generic)| the detection_prompt auto-extracted in sensor_data |
+| Pick-and-lift cube + sphere    | "red cube . red sphere"                          |
+| Rubbish + bin                  | "crumpled silver paper . bin"                    |
+| Stack blocks                   | "red cube"                                        |
 
-**Ground Truth for Stacking Zone:**
-- **StackBlocks only:** `get_target_position()` provides the stacking zone — used directly for motion.
-- Stacking zone is a flat 2mm plane marker that GroundingDINO cannot reliably distinguish from green distractor blocks.
-- All other tasks: perception (GroundingDINO + LAB color verification) used for all object localization.
-
-**Multi-object syntax:** `"object1 . object2"` (period + space separator)
+- Multi-object prompts use the "object1 . object2" syntax (period + space).
+- The first phrase in a multi-object prompt is the object acted on first (primary), the second is
+  the destination (secondary).
+- The stacking-zone marker is NOT detectable (flat 2 mm plane) — take its x,y from
+  get_target_position(), never from detection (see SCENE FACTS).
 """
 
 # ==============================================================================
@@ -233,64 +200,6 @@ GRIPPER_STATE_MACHINE = """GRIPPER STATE RULES:
 5. PushButton: first action must be CLOSE.
 6. ReachTarget: gripper stays OPEN throughout.
 7. After any failed move_to_position: do NOT change gripper state."""
-
-TASK_SEQUENCES = {
-    "ReachTarget": """Steps:
-1. control_gripper("open")
-2. move_to_position(target_x, target_y, target_z + [approach_height])
-3. move_to_position(target_x, target_y, target_z)
-Detection: detect_object_3d(detection_prompt, ...) -> position_3d""",
-
-    "PickAndLift": """Steps:
-1. control_gripper("open")
-2. move_to_position(cube_x, cube_y, cube_z + [approach_height])
-3. move_to_position(cube_x, cube_y, cube_z + [grasp_offset])
-4. control_gripper("close")  [CLOSED: stays closed through step 5]
-5. move_to_position(sphere_x, sphere_y, sphere_z)
-Detection: detect_object_3d("red cube . red sphere", ...) -> objects[0]=cube, objects[1]=sphere""",
-
-    "PushButton": """Steps:
-1. control_gripper("close")  [CLOSE FIRST]
-2. move_to_position(btn_x, btn_y, btn_z + [approach_height])
-3. move_to_position(btn_x, btn_y, btn_z)  [if task_completed=True -> skip to step 5]
-4. move_to_position(btn_x, btn_y, btn_z - [push_depth])  [only if task_completed=False]
-5. move_to_position(btn_x, btn_y, btn_z + [approach_height])
-Detection: detect_object_3d(detection_prompt, ...) -> position_3d""",
-
-    "PutRubbishInBin": """Steps:
-1. control_gripper("open")
-2. move_to_position(trash_x, trash_y, trash_z + [approach_height])
-3. move_to_position(trash_x, trash_y, trash_z + [grasp_offset])
-4. control_gripper("close")  [CLOSED: stays closed through step 6]
-5. move_to_position(trash_x, trash_y, trash_z + [approach_height])
-6. move_to_position(bin_x, bin_y, bin_z + [bin_drop_height])
-7. control_gripper("open")  [RELEASE]
-8. move_to_position(bin_x, bin_y, bin_z + [approach_height])
-Detection: detect_object_3d("crumpled silver paper . bin", ...) -> objects[0]=trash, objects[1]=bin""",
-
-    "StackBlocks": """SETUP: get_target_position() -> sz_x, sz_y (ignore sz_z)
-       detect_object_3d("red cube", ...) -> b1=objects[0], b2=objects[1] (by confidence desc)
-
-BLOCK 1:
-1. control_gripper("open")
-2. move_to_position(b1_x, b1_y, b1_z + [approach_height])
-3. move_to_position(b1_x, b1_y, b1_z + [grasp_offset])
-4. control_gripper("close")  [CLOSED: stays closed through step 5]
-5. move_to_position(sz_x, sz_y, 0.82)
-6. control_gripper("open")  [RELEASE BLOCK 1]
-
-BLOCK 2:
-7. move_to_position(b2_x, b2_y, b2_z + [approach_height])
-8. move_to_position(b2_x, b2_y, b2_z + [grasp_offset])
-9. control_gripper("close")  [CLOSED: stays closed through step 10]
-10. move_to_position(sz_x, sz_y, 0.87)
-11. control_gripper("open")  [RELEASE BLOCK 2]
-sz_x, sz_y from get_target_position() only. z=0.82 (block 1), z=0.87 (block 2) — fixed.""",
-}
-
-ALL_TASK_SEQUENCES = "\n\n".join(
-    f"### {task}\n{seq}" for task, seq in TASK_SEQUENCES.items()
-)
 
 # ==============================================================================
 # Agent 1: Sensing Agent
@@ -312,7 +221,10 @@ Do not detect objects, do not make decisions, do not call motion tools.
 - get_target_position()      -> <stacking_zone_position | target_position>
 
 ## INPUT
-task_name from the approved plan — one of:
+You run after the OrchestratorAgent's plan was approved and control was transferred to
+the ExecutionPipeline. Identify task_name from the conversation — the OrchestratorAgent's
+most recent plan states it in its "Task:" field (and the user's request implies it).
+It is one of:
   ReachTarget | PickAndLift | PushButton | PutRubbishInBin | StackBlocks
 
 ## SEQUENCE (execute in exact order)
@@ -371,17 +283,14 @@ Read from SensingAgent output_key "sensor_data":
   - If sensor_data contains SENSING FAILED: output PERCEPTION FAILED immediately, call no tools.
 
 ## DETECTION PROMPT
-| Task            | Prompt to use                          |
-|-----------------|----------------------------------------|
-| ReachTarget     | detection_prompt from sensor_data      |
-| PickAndLift     | "red cube . red sphere"                |
-| PushButton      | detection_prompt from sensor_data      |
-| PutRubbishInBin | "crumpled silver paper . bin"          |
-| StackBlocks     | "red cube"                             |
+Use the detection prompt the OrchestratorAgent specified in the approved plan's
+"Target / Perception spec" (read it from the plan in the conversation). That spec names which
+objects to locate and the colour+noun phrase for each. If the plan defers to the sensor_data
+detection_prompt, use that. Combine multiple objects with the "object1 . object2" syntax.
 
 ## SEQUENCE
 1. Check sensor_data — if SENSING FAILED: output PERCEPTION FAILED, stop.
-2. Select prompt from DETECTION PROMPT table.
+2. Take the detection prompt from the approved plan's perception spec (see DETECTION PROMPT).
 3. Call detect_object_3d(prompt, rgb_path, depth_path, intrinsics_path, pose_path, pointcloud_path).
 4. If success=False ("No objects detected"): retry ONCE with broadened prompt:
    - "red cube"                    -> "cube"
@@ -399,11 +308,12 @@ Prompt used: [prompt] | Retried: [yes/no]
 Objects detected:
   - [label]: position=[x, y, z], confidence=[0.00], role=[primary|secondary]
 
-Role assignment:
-  - Single-object tasks: one entry, role=primary
-  - PickAndLift: objects[0]=cube role=primary, objects[1]=sphere role=secondary
-  - PutRubbishInBin: objects[0]=trash role=primary, objects[1]=bin role=secondary
-  - StackBlocks: all detected red cubes listed, sorted by confidence descending
+Role assignment (so MotionAgent can bind the plan's object references to positions):
+  - One object detected: role=primary.
+  - Two distinct objects: the object the plan grasps/acts on first = primary, the destination object
+    = secondary, following the order the plan's perception spec lists them.
+  - Several same-type objects (e.g. stack blocks): list all, sorted by confidence descending; the plan
+    consumes them in that order.
 
 On failure:
 PERCEPTION FAILED
@@ -447,17 +357,18 @@ From PerceptionAgent output_key "perception_result":
   - status: if PERCEPTION FAILED -> output MOTION ABORTED immediately, call no tools.
   - objects[]: detected positions with role=primary|secondary
 
-From approved plan:
-  - task name and motion steps with filled-in parameter values
+From the approved plan (read it from the OrchestratorAgent's message in the conversation):
+  - the ordered motion steps, each naming a symbolic object reference (e.g. cube, sphere, trash,
+    bin, block, stacking zone) plus a parameter value
+  - the perception spec listing which objects were to be detected
 
-## POSITION EXTRACTION
-| Task            | Primary position              | Secondary position               |
-|-----------------|-------------------------------|----------------------------------|
-| ReachTarget     | objects[role=primary]         | —                                |
-| PickAndLift     | objects[role=primary] = cube  | objects[role=secondary] = sphere |
-| PushButton      | objects[role=primary]         | —                                |
-| PutRubbishInBin | objects[role=primary] = trash | objects[role=secondary] = bin    |
-| StackBlocks     | objects[0] = b1 (highest conf)| objects[1] = b2; stacking zone from ground truth |
+## POSITION BINDING
+The plan tells you WHICH object each step acts on; perception_result tells you WHERE it is.
+Bind each symbolic object reference in the plan to a detected object from perception_result by
+matching name/role (primary/secondary as PerceptionAgent assigned them; for multiple same-type
+objects, take them in the confidence order PerceptionAgent listed). Where the plan states a position
+comes from get_target_position() (e.g. a stacking zone), use that value rather than a detection.
+Execute the plan's steps in their exact order with the bound coordinates — never invent or reorder steps.
 
 ## EXECUTION PATTERN
 
@@ -471,10 +382,10 @@ Before each action, write one Thought line confirming gripper state:
   ⚡ Action:      [tool call with actual coordinates]
   👁️  Observation: success=[...], task_completed=[...], gripper=[open/closed]
 
-### 🔴 HIGH RISK (StackBlocks) — ReAct + sub-task checkpoints
-Same ReAct pattern as MEDIUM. After completing Block 1 (steps 1-6) output:
-  🏁 CHECKPOINT: Block 1 placed at stacking zone. Proceeding to Block 2.
-Then continue with Block 2 (steps 7-11).
+### 🔴 HIGH RISK (multi-object placement, e.g. StackBlocks) — ReAct + sub-task checkpoints
+Same ReAct pattern as MEDIUM. After each object is released at its target, output a checkpoint
+before starting the next object:
+  🏁 CHECKPOINT: object [k] placed. Proceeding to object [k+1].
 
 ## ERROR RECOVERY (per step, max 2 retries)
 move_to_position fails:
@@ -541,6 +452,23 @@ On upstream failure:
 )
 
 # ==============================================================================
+# Execution Pipeline: Sensing -> Perception -> Motion (runs after approval)
+# ==============================================================================
+# The OrchestratorAgent transfers control here only after the human approves the plan.
+# This SequentialAgent owns ALL execution; the orchestrator holds no execution tools.
+
+execution_pipeline = SequentialAgent(
+    name="ExecutionPipeline",
+    description=(
+        "Executes an approved manipulation plan end to end: SensingAgent loads the task "
+        "and captures sensor data, PerceptionAgent detects the target objects in 3D, and "
+        "MotionAgent runs the motion sequence with gripper-state tracking and escalation. "
+        "The OrchestratorAgent transfers control here only after human approval."
+    ),
+    sub_agents=[sensing_agent, perception_agent, motion_agent],
+)
+
+# ==============================================================================
 # Root Agent: Orchestrator with Human-in-the-Loop
 # ==============================================================================
 
@@ -567,16 +495,25 @@ Motion:     move_to_position(x, y, z, use_planning=True)
             control_gripper("open"|"close") -> <success, gripper_state, task_completed>
             lift_gripper(height)            -> <success, task_completed>
 
-{MOTION_SEQUENCES}
+{MANIPULATION_PRIMITIVES}
 
-## TASK ROUTING
-| Task            | Risk   | Gripper sequence            |
-|-----------------|--------|-----------------------------|
-| ReachTarget     | LOW    | OPEN throughout              |
-| PushButton      | LOW    | CLOSE first, push, retract   |
-| PickAndLift     | MEDIUM | OPEN -> CLOSE -> hold        |
-| PutRubbishInBin | MEDIUM | OPEN -> CLOSE -> OPEN        |
-| StackBlocks     | HIGH   | (OPEN -> CLOSE -> OPEN) x2   |
+{PLANNING_PRINCIPLES}
+
+{SCENE_FACTS}
+
+{DETECTION_VOCAB}
+
+## TASK ROUTING (risk only — derive the gripper sequence and steps yourself)
+| Task            | Risk   |
+|-----------------|--------|
+| ReachTarget     | LOW    |
+| PushButton      | LOW    |
+| PickAndLift     | MEDIUM |
+| PutRubbishInBin | MEDIUM |
+| StackBlocks     | HIGH   |
+
+The table gives ONLY the risk level (which sets the execution discipline). It does NOT give you
+the gripper sequence or the steps — you must reason those out from the goal using PLANNING PRINCIPLES.
 
 ---
 
@@ -584,9 +521,17 @@ Motion:     move_to_position(x, y, z, use_planning=True)
 
 ### Phase 1: Planning (REQUIRES HUMAN APPROVAL)
 
-1. Parse user request -> identify task from TASK ROUTING table.
-2. Present plan using PLAN FORMAT below with default parameters.
-3. Wait for human response and handle:
+1. Parse the user request -> identify the task and its risk from TASK ROUTING.
+2. REASON OUT THE PLAN (do not recall a memorized sequence):
+   a. State the goal and its success condition in one line.
+   b. Derive the gripper sequence from the goal (PLANNING PRINCIPLE 1).
+   c. List the objects whose positions the motion needs, and the detection prompt for each
+      (PRINCIPLE 4) — consult SCENE FACTS for which come from detection vs get_target_position().
+   d. Compose the ordered steps from MANIPULATION PRIMITIVES (PRINCIPLE 2 ordering), filling in
+      parameter values from TASK PARAMETERS.
+   e. Write each step's Action/Reason from your own reasoning — not from a template.
+3. Present the plan using PLAN FORMAT below.
+4. Wait for human response and handle:
 
 APPROVE ("approved" / "yes" / "proceed" / "go"):
   -> Proceed to Phase 2.
@@ -629,35 +574,21 @@ RULE: Never auto-approve after an edit. Explicit approval required every time.
 
 ### Phase 2: Execution (only after explicit approval)
 
-Sensing:
-1. load_task(task_name)
-2. get_camera_observation() -> save all paths + detection_prompt
-3. get_target_position() -> save ground truth positions
+You do NOT execute the task yourself and you hold NO execution tools. Execution is
+delegated to the ExecutionPipeline — a separate multi-agent sequence:
+SensingAgent -> PerceptionAgent -> MotionAgent.
 
-Perception:
-4. Call detect_object_3d with task-appropriate prompt from TASK SEQUENCES.
-   If success=False: retry ONCE with broadened prompt (drop color word).
-   If retry also fails: ESCALATE, stop.
+On approval:
+1. State the approved task in one line: "Executing approved plan: <TaskName>."
+2. Call transfer_to_agent(agent_name="ExecutionPipeline"). Do nothing else.
 
-Motion — execute the approved sequence with detected positions.
-  Use MOTION SEQUENCES above as the step reference — every step listed must be executed in order.
-  LOW RISK (ReachTarget, PushButton): execute steps directly, log each result.
-  MEDIUM/HIGH RISK: use ReAct pattern for each motion step:
-    Thought: Gripper [open/closed]. [One-line state check before action.]
-    Action: [tool call with actual coordinates]
-    Observation: success=[...], task_completed=[...], gripper=[open/closed]
+The ExecutionPipeline performs all sensing, perception, and motion. Its MotionAgent
+reports the final outcome (MOTION COMPLETE / MOTION FAILED) or escalates
+(SENSING FAILED / PERCEPTION FAILED / EXECUTION PAUSED) directly to the human.
 
-After every move_to_position: if task_completed=True, stop immediately and report SUCCESS.
-StackBlocks: after Block 1 steps (1-6), log checkpoint before continuing to Block 2.
-
-Error Recovery (Phase 2):
-  move_to_position fails:
-    Retry 1: z + 0.02m, use_planning=True
-    Retry 2: original z, use_planning=False
-    After 2 retries: ESCALATE
-  detect_object_3d fails after retry: ESCALATE
-  control_gripper fails: call get_current_state() first — if already in target state, continue.
-  3 or more total failures: ESCALATE immediately regardless of retry count.
+The MOTION SEQUENCES, TASK SEQUENCES, and error-recovery rules in this prompt are the
+contract the pipeline follows — you use them only to build and explain the plan during
+Phase 1, never to execute it yourself.
 
 ---
 
@@ -685,56 +616,19 @@ Format:
      🔒 After this: [what state is now locked in and what it means for the next steps]
                     (only for control_gripper calls and StackBlocks block checkpoints)
 
-Example for PutRubbishInBin:
-  1. control_gripper("open")
-     ⚡ Action:     Open the gripper fingers.
-     💡 Reason:     Ensures fingers are fully clear before approaching the object —
-                    avoids accidentally pushing the object on the way down.
-     🔒 After this: Gripper is OPEN. The robot can now safely descend to the object.
+Generic format illustration (shows the STRUCTURE only — NOT a task template; derive your
+own steps for the actual task from PLANNING PRINCIPLES):
+  N. move_to_position(obj_x, obj_y, obj_z + 0.15)
+     ⚡ Action:     Move to 15 cm above the object.
+     💡 Reason:     Approaching from directly above (approach_height=0.15 m) keeps the
+                    descent path clear of nearby objects. Increase if the area is cluttered.
 
-  2. move_to_position(trash_x, trash_y, trash_z + 0.15)
-     ⚡ Action:     Move to 15cm above the trash object.
-     💡 Reason:     Approaching from directly above (approach_height=0.15m) avoids
-                    collisions with surrounding objects and gives the motion planner
-                    a clear, unobstructed path to descend. Increase if objects are
-                    cluttered nearby.
-
-  3. move_to_position(trash_x, trash_y, trash_z + 0.015)
-     ⚡ Action:     Descend to 1.5cm above the object centre — the grasp position.
-     💡 Reason:     Grasping at surface level causes IK failures on crumpled paper.
-                    The 1.5cm offset (grasp_offset=0.015m) gives reliable finger
-                    contact without collision. Increase if the object is taller or
-                    the gripper clips the table surface.
-
-  4. control_gripper("close")
-     ⚡ Action:     Close the gripper fingers around the trash object.
-     💡 Reason:     Gripper is now at the correct grasp height. Closing here locks
-                    the object in place before any transport movement begins.
-     🔒 After this: Gripper is CLOSED and holding the object. It must stay closed
-                    through steps 5 and 6 — opening early drops the object before
-                    it reaches the bin.
-
-  5. move_to_position(trash_x, trash_y, trash_z + 0.15)
-     ⚡ Action:     Lift the object 15cm above its original position.
-     💡 Reason:     Clears the object from the table surface before moving laterally
-                    to the bin, preventing dragging or collision with nearby objects.
-
-  6. move_to_position(bin_x, bin_y, bin_z + 0.10)
-     ⚡ Action:     Move to 10cm above the bin opening.
-     💡 Reason:     Positions the object for a clean drop into the bin (bin_drop_height=
-                    0.10m). Too low risks collision with the bin rim; too high risks
-                    the object bouncing out.
-
-  7. control_gripper("open")
-     ⚡ Action:     Open the gripper to release the object into the bin.
-     💡 Reason:     Releases the trash at the correct drop height above the bin.
-     🔒 After this: Gripper is OPEN and the object is released. The task is complete
-                    once the robot retracts in step 8.
-
-  8. move_to_position(bin_x, bin_y, bin_z + 0.15)
-     ⚡ Action:     Retract the gripper 15cm above the bin.
-     💡 Reason:     Moves the arm clear of the bin opening to a safe rest position
-                    before the task ends.
+  N+1. control_gripper("close")
+     ⚡ Action:     Close the gripper around the object.
+     💡 Reason:     The gripper is at grasp height, so closing now secures the object
+                    before any transport begins.
+     🔒 After this: Gripper is CLOSED and holding the object — it must stay closed through
+                    every move until the designated release step.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚙️  Parameters:
@@ -769,12 +663,6 @@ What would you like to do?
 
 ---
 
-## TASK SEQUENCES
-
-{ALL_TASK_SEQUENCES}
-
----
-
 ## TASK PARAMETERS
 | Task            | Parameters (default, [range])                                                                   |
 |-----------------|-------------------------------------------------------------------------------------------------|
@@ -791,27 +679,15 @@ What would you like to do?
 ---
 
 ## HARD CONSTRAINTS
-1. NEVER execute any tool before receiving explicit human approval ("approved"/"yes"/"proceed"/"go").
-2. NEVER proceed to Phase 2 if load_task or get_camera_observation returns success=False.
+1. NEVER call transfer_to_agent before receiving explicit human approval ("approved"/"yes"/"proceed"/"go").
+2. You hold NO execution tools — never attempt to sense, perceive, or move. Delegate via transfer_to_agent("ExecutionPipeline").
 3. After ANY plan edit, ALWAYS re-present the full updated plan and wait — never self-approve.
-4. NEVER call detect_object_3d before approval — positions are detected after approval only.
+4. During planning you do not detect objects — positions are detected by the pipeline after approval only.
 5. Gripper state machine must remain valid after any plan edit — block edits that violate it.
-6. Max 2 retries per failed tool call. Max 3 total failures per execution before mandatory escalation.
-7. NEVER call reset_current_task() without explicit human instruction (resets the simulation scene).
-8. task_completed=True at any step means SUCCESS — stop immediately, do not continue.""",
-    tools=[rlbench_toolset, perception_toolset]
+6. The pipeline (not you) enforces retry and escalation limits during execution.
+7. Transfer to ExecutionPipeline exactly once per approved plan.""",
+    sub_agents=[execution_pipeline],
 )
-
-# ==============================================================================
-# Alternative: Sequential Pipeline (for automated execution)
-# ==============================================================================
-
-sequential_pipeline = SequentialAgent(
-    name="SequentialManipulationPipeline",
-    description="Automated sequential execution: Sensing -> Perception -> Motion",
-    sub_agents=[sensing_agent, perception_agent, motion_agent]
-)
-
 
 # ==============================================================================
 # Print Info
@@ -822,7 +698,8 @@ if __name__ == "__main__":
     print("Multi-Agent Robot Manipulation Orchestrator")
     print("=" * 60)
     print("\nArchitecture:")
-    print("  Orchestrator (Planning) → Human Approval → Sensing → Perception → Motion")
+    print("  Orchestrator (Planning) → Human Approval → [ExecutionPipeline] → Sensing → Perception → Motion")
+    print("  (Orchestrator transfers to ExecutionPipeline after approval — it holds no execution tools)")
     print("\nSupported Tasks:")
     print("  - ReachTarget: 'Reach the red target'")
     print("  - PickAndLift: 'Pick up the red block'")
@@ -834,7 +711,7 @@ if __name__ == "__main__":
     print(f"  2. {sensing_agent.name}")
     print(f"  3. {perception_agent.name}")
     print(f"  4. {motion_agent.name}")
+    print(f"  → wrapped in {execution_pipeline.name} (Sequential: Sensing → Perception → Motion)")
     print("\nUsage:")
-    print("  - Import root_agent for ADK web interface")
-    print("  - Import sequential_pipeline for automated execution")
+    print("  - Import root_agent for ADK web interface (orchestrator + execution pipeline)")
     print("=" * 60)
